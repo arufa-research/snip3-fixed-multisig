@@ -1,5 +1,5 @@
 use cosmwasm_std::StdError;
-use cw_utils::ThresholdError;
+use crate::threshold::ThresholdError;
 
 use thiserror::Error;
 

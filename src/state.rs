@@ -1,7 +1,9 @@
+#![allow(unused)]
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use cosmwasm_std::{ BlockInfo, Storage, CosmosMsg, Empty, Decimal, Uint128 };
-// use cosmwasm_beta::{ Decimal, Uint128 };
+use cosmwasm_std::{ BlockInfo, Storage, CosmosMsg, Empty };
+use crate::math::{Decimal, Uint128};
 
 use cosmwasm_storage::{ Singleton, ReadonlySingleton, Bucket, ReadonlyBucket, 
     singleton, singleton_read, bucket, bucket_read};
@@ -11,7 +13,8 @@ use cosmwasm_storage::{ Singleton, ReadonlySingleton, Bucket, ReadonlyBucket,
 // use cw_utils::{ Threshold };
 
 use crate::expiration::{ Expiration, Duration };
-use crate::msg::{ Voter, Vote, Status };
+use crate::msg::{ Voter, Vote };
+use crate::query::{Status};
 use crate::threshold::Threshold;
 
 pub static CONFIG_KEY: &[u8] = b"config";
@@ -19,6 +22,8 @@ pub static PROPOSAL_COUNT_KEY: &[u8] = b"proposal_count";
 pub static BALLOTS_KEY: &[u8] = b"votes";
 pub static PROPOSALS_KEY: &[u8] = b"proposals";
 pub static VOTERS_KEY: &[u8] = b"voters";
+
+pub const PREFIX_PROPOSAL_KEY: &[u8] = b"prefix";
 
 const PRECISION_FACTOR: u128 = 1_000_000_000;
 
@@ -160,7 +165,7 @@ impl Proposal {
                 self.votes.no
                     > votes_needed(
                         self.total_weight - self.votes.abstain,
-                        1_000_000_000_000_000_000 - percentage_needed,
+                        Decimal::one() - percentage_needed,
                     )
             }
             Threshold::ThresholdQuorum {

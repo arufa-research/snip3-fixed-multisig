@@ -1,8 +1,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{Decimal, StdError, Uint128};
+use cosmwasm_std::{StdError};
 use thiserror::Error;
+use crate::math::Decimal;
+
 
 /// This defines the different ways tallies can happen.
 ///

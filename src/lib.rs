@@ -1,12 +1,14 @@
 pub mod contract;
 mod error;
 pub mod expiration;
+mod math;
 pub mod msg;
+pub mod query;
 pub mod state;
 pub mod threshold;
 
 pub use crate::error::ContractError;
-
+pub use crate::math::{ Decimal, Uint128 };
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {

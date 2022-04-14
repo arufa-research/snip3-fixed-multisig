@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::cmp::Ordering;
 
 use cosmwasm_std::{
@@ -5,20 +7,22 @@ use cosmwasm_std::{
     StdError, StdResult, Storage, HumanAddr, MessageInfo, CosmosMsg, Empty, BlockInfo
 };
 
-use cw3::{
-    ProposalListResponse, ProposalResponse, VoteInfo, VoteListResponse, VoteResponse,
-    VoterDetail, VoterListResponse, VoterResponse,
-};
+use cosmwasm_std::{Order, KV};
+
+use cosmwasm_storage::{ReadonlyBucket};
 // use cw_storage_plus::Bound;
 // use cw_utils::{Expiration, ThresholdResponse};
 
 use crate::error::ContractError;
-
-use crate::msg::{CountResponse, HandleMsg, InitMsg, QueryMsg, Status, Vote};
+use crate::expiration::{Duration, Expiration};
+use crate::msg::{HandleMsg, InitMsg, QueryMsg, Vote, Voter};
+use crate::query::{
+    ProposalListResponse, ProposalResponse, VoteInfo, VoteListResponse, VoteResponse,
+    VoterDetail, VoterListResponse, VoterResponse, Status
+};
 use crate::state::{config, config_read, voters, voters_read, proposal_count, proposal_count_read,
                     ballots, ballots_read, proposals, proposals_read};
 use crate::state::{Ballot, Config, Proposal, Votes};
-use crate::expiration::{Duration, Expiration};
 use crate::threshold::ThresholdResponse;
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
@@ -257,7 +261,7 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
 
 // Queries and query functions
 // TODO: fix up these functions:
-// list_proposals, reverse_proposals, list_votes, list_voters
+// reverse_proposals, list_votes, list_voters
 
 pub fn query<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
@@ -269,24 +273,20 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
         QueryMsg::Proposal { proposal_id } => to_binary(&query_proposal(deps, env, proposal_id)?),
         QueryMsg::Vote { proposal_id, voter } => to_binary(&query_vote(deps, proposal_id, voter)?),
         QueryMsg::ListProposals { start_after, limit } => {
-            to_binary(&None) 
-            // to_binary(&list_proposals(deps, env, start_after, limit)?)
-        }
+            to_binary(&list_proposals(deps, env, start_after, limit)?)
+        },
         QueryMsg::ReverseProposals {
             start_before,
             limit,
-        } => to_binary(&None),
-            // to_binary(&reverse_proposals(deps, env, start_before, limit)?),
+        } => to_binary(&reverse_proposals(deps, env, start_before, limit)?),
         QueryMsg::ListVotes {
             proposal_id,
             start_after,
             limit,
-        } => to_binary(&None),
-            // to_binary(&list_votes(deps, proposal_id, start_after, limit)?),
+        } => to_binary(&list_votes(deps, proposal_id, start_after, limit)?),
         QueryMsg::Voter { address } => to_binary(&query_voter(deps, address)?),
         QueryMsg::ListVoters { start_after, limit } => {
-            to_binary(&None)
-            // to_binary(&list_voters(deps, start_after, limit)?)
+            to_binary(&list_voters(deps, start_after, limit)?)
         }
     }
 }
@@ -315,39 +315,39 @@ fn query_proposal<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, env: E
 const MAX_LIMIT: u32 = 30;
 const DEFAULT_LIMIT: u32 = 10;
 
-// fn list_proposals<S: Storage, A: Api, Q: Querier>(
-//     deps: &Extern<S, A, Q>,
-//     env: Env,
-//     start_after: Option<u64>,
-//     limit: Option<u32>,
-// ) -> StdResult<ProposalListResponse> {
-//     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-//     let start = start_after.map(|s| s.to_string().as_bytes());
-//     let proposals = PROPOSALS
-//         .range(deps.storage, start, None, Order::Ascending)
-//         .take(limit)
-//         .map(|p| map_proposal(&env.block, p))
-//         .collect::<StdResult<_>>()?;
+fn list_proposals<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    env: Env,
+    start_after: Option<u64>,
+    limit: Option<u32>,
+) -> StdResult<ProposalListResponse> {
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+    let start = start_after.map(|s| s.to_string().as_bytes());
+    let proposals = proposals_read(&deps.storage)
+        .range(start, None, Order::Ascending)
+        .take(limit)
+        .map(|p| map_proposal(&env.block, p))
+        .collect::<StdResult<_>>()?;
 
-//     Ok(ProposalListResponse { proposals })
-// }
+    Ok(ProposalListResponse { proposals })
+}
 
-// fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
-//     deps: &Extern<S, A, Q>,
-//     env: Env,
-//     start_before: Option<u64>,
-//     limit: Option<u32>,
-// ) -> StdResult<ProposalListResponse> {
-//     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-//     let end = start_before.map(Bound::exclusive);
-//     let props: StdResult<Vec<_>> = PROPOSALS
-//         .range(deps.storage, None, end, Order::Descending)
-//         .take(limit)
-//         .map(|p| map_proposal(&env.block, p))
-//         .collect();
+fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    env: Env,
+    start_before: Option<u64>,
+    limit: Option<u32>,
+) -> StdResult<ProposalListResponse> {
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+    let end = start_before.map(Bound::exclusive);
+    let props: StdResult<Vec<_>> = PROPOSALS
+        .range(deps.storage, None, end, Order::Descending)
+        .take(limit)
+        .map(|p| map_proposal(&env.block, p))
+        .collect();
 
-//     Ok(ProposalListResponse { proposals: props? })
-// }
+    Ok(ProposalListResponse { proposals: props? })
+}
 
 fn map_proposal(
     block: &BlockInfo,
@@ -388,31 +388,31 @@ fn query_vote<S: Storage, A: Api, Q: Querier>(
     Ok(VoteResponse { vote })
 }
 
-// fn list_votes<S: Storage, A: Api, Q: Querier>(
-//     deps: &Extern<S, A, Q>,
-//     proposal_id: u64,
-//     start_after: Option<String>,
-//     limit: Option<u32>,
-// ) -> StdResult<VoteListResponse> {
-//     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-//     let start = start_after.map(|s| Bound::ExclusiveRaw(s.into()));
+fn list_votes<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    proposal_id: u64,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<VoteListResponse> {
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+    let start = start_after.map(|s| Bound::ExclusiveRaw(s.into()));
 
-//     let votes = BALLOTS
-//         .prefix(proposal_id)
-//         .range(deps.storage, start, None, Order::Ascending)
-//         .take(limit)
-//         .map(|item| {
-//             item.map(|(addr, ballot)| VoteInfo {
-//                 proposal_id,
-//                 voter: addr.into(),
-//                 vote: ballot.vote,
-//                 weight: ballot.weight,
-//             })
-//         })
-//         .collect::<StdResult<_>>()?;
+    let votes = BALLOTS
+        .prefix(proposal_id)
+        .range(deps.storage, start, None, Order::Ascending)
+        .take(limit)
+        .map(|item| {
+            item.map(|(addr, ballot)| VoteInfo {
+                proposal_id,
+                voter: addr.into(),
+                vote: ballot.vote,
+                weight: ballot.weight,
+            })
+        })
+        .collect::<StdResult<_>>()?;
 
-//     Ok(VoteListResponse { votes })
-// }
+    Ok(VoteListResponse { votes })
+}
 
 fn query_voter<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
@@ -423,27 +423,27 @@ fn query_voter<S: Storage, A: Api, Q: Querier>(
     Ok(VoterResponse { weight })
 }
 
-// fn list_voters<S: Storage, A: Api, Q: Querier>(
-//     deps: &Extern<S, A, Q>,
-//     start_after: Option<String>,
-//     limit: Option<u32>,
-// ) -> StdResult<VoterListResponse> {
-//     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-//     let start = start_after.map(|s| Bound::ExclusiveRaw(s.into()));
+fn list_voters<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<VoterListResponse> {
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+    let start = start_after.map(|s| Bound::ExclusiveRaw(s.into()));
 
-//     let voters = VOTERS
-//         .range(deps.storage, start, None, Order::Ascending)
-//         .take(limit)
-//         .map(|item| {
-//             item.map(|(addr, weight)| VoterDetail {
-//                 addr: addr.into(),
-//                 weight,
-//             })
-//         })
-//         .collect::<StdResult<_>>()?;
+    let voters = VOTERS
+        .range(deps.storage, start, None, Order::Ascending)
+        .take(limit)
+        .map(|item| {
+            item.map(|(addr, weight)| VoterDetail {
+                addr: addr.into(),
+                weight,
+            })
+        })
+        .collect::<StdResult<_>>()?;
 
-//     Ok(VoterListResponse { voters })
-// }
+    Ok(VoterListResponse { voters })
+}
 
 // #[cfg(test)]
 // mod tests {
