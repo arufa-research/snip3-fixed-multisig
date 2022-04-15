@@ -121,7 +121,7 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
         id += 1;
         Ok(id)
     })?;
-    proposals(&mut deps.storage).save(&proposal_id.to_string().as_bytes(), &prop)?;
+    proposals(&mut deps.storage).save(&proposal_id.to_le_bytes(), &prop)?;
 
     // add the first yes vote from voter
     let ballot = Ballot {
@@ -153,15 +153,13 @@ pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
 ) -> Result<HandleResponse<Empty>, ContractError> {
     // only members of the multisig with weight >= 1 can vote
     let voter_power = voters_read(&deps.storage).may_load(&info.sender.to_string().as_bytes())?;
-    // let voter_power = VOTERS.may_load(deps.storage, &info.sender)?;
     let vote_power = match voter_power {
         Some(power) if power >= 1 => power,
         _ => return Err(ContractError::Unauthorized {}),
     };
 
     // ensure proposal exists and can be voted on
-    let mut prop = proposals_read(&deps.storage).load(proposal_id.to_string().as_bytes())?;
-    // let mut prop = PROPOSALS.load(deps.storage, proposal_id)?;
+    let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     if prop.status != Status::Open {
         return Err(ContractError::NotOpen {});
     }
@@ -181,8 +179,7 @@ pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
     // update vote tally
     prop.votes.add_vote(vote, vote_power);
     prop.update_status(&env.block);
-    proposals(&mut deps.storage).save(&proposal_id.to_string().as_bytes(), &prop)?;
-    // PROPOSALS.save(deps.storage, proposal_id, &prop)?;
+    proposals(&mut deps.storage).save(&proposal_id.to_le_bytes(), &prop)?;
 
     Ok(HandleResponse {
         messages: vec![],
@@ -203,7 +200,7 @@ pub fn execute_execute<S: Storage, A: Api, Q: Querier>(
 ) -> Result<HandleResponse, ContractError> {
     // anyone can trigger this if the vote passed
 
-    let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_string().as_bytes())?;
+    let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     // we allow execution even after the proposal "expiration" as long as all vote come in before
     // that point. If it was approved on time, it can be executed any time.
     if prop.status != Status::Passed {
@@ -212,7 +209,7 @@ pub fn execute_execute<S: Storage, A: Api, Q: Querier>(
 
     // set it to executed
     prop.status = Status::Executed;
-    proposals(&mut deps.storage).save(proposal_id.to_string().as_bytes(), &prop)?;
+    proposals(&mut deps.storage).save(&proposal_id.to_le_bytes(), &prop)?;
 
     // dispatch all proposed messages
     Ok(HandleResponse {
@@ -233,7 +230,7 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
 ) -> Result<HandleResponse<Empty>, ContractError> {
     // anyone can trigger this if the vote passed
 
-    let mut prop = proposals_read(&deps.storage).load(proposal_id.to_string().as_bytes())?;
+    let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     if [Status::Executed, Status::Rejected, Status::Passed]
         .iter()
         .any(|x| *x == prop.status)
@@ -247,7 +244,7 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
     // set it to failed
     prop.status = Status::Rejected;
 
-    proposals(&mut deps.storage).save(proposal_id.to_string().as_bytes(), &prop)?;
+    proposals(&mut deps.storage).save(&proposal_id.to_le_bytes(), &prop)?;
 
     Ok(HandleResponse {
         messages: vec![],
@@ -297,7 +294,7 @@ fn query_threshold<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> St
 }
 
 fn query_proposal<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, env: Env, id: u64) -> StdResult<ProposalResponse> {
-    let prop = proposals_read(&deps.storage).load(&id.to_string().as_bytes())?;
+    let prop = proposals_read(&deps.storage).load(&id.to_le_bytes())?;
     let status = prop.current_status(&env.block);
     let threshold = prop.threshold.to_response(prop.total_weight);
     Ok(ProposalResponse {
@@ -322,11 +319,11 @@ fn list_proposals<S: Storage, A: Api, Q: Querier>(
     limit: Option<u32>,
 ) -> StdResult<ProposalListResponse> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let start = start_after.map(|s| s.to_string().as_bytes());
+    let start = start_after.unwrap_or_default().to_string(); //not sure about this
     let proposals = proposals_read(&deps.storage)
-        .range(start, None, Order::Ascending)
+        .range(Some(start.as_bytes()), None, Order::Ascending)
         .take(limit)
-        .map(|p| map_proposal(&env.block, p))
+        .map(|p| map_proposal(&deps, &env.block, p))
         .collect::<StdResult<_>>()?;
 
     Ok(ProposalListResponse { proposals })
@@ -339,25 +336,28 @@ fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
     limit: Option<u32>,
 ) -> StdResult<ProposalListResponse> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let end = start_before.map(Bound::exclusive);
-    let props: StdResult<Vec<_>> = PROPOSALS
-        .range(deps.storage, None, end, Order::Descending)
+    let end = start_before.unwrap_or_default().to_string(); //not sure about this
+    let props: StdResult<Vec<_>> = proposals_read(&deps.storage)
+        .range(None, Some(end.as_bytes()), Order::Descending)
         .take(limit)
-        .map(|p| map_proposal(&env.block, p))
+        .map(|p| map_proposal(&deps, &env.block, p))
         .collect();
 
     Ok(ProposalListResponse { proposals: props? })
 }
 
-fn map_proposal(
+fn map_proposal<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
     block: &BlockInfo,
-    item: StdResult<(u64, Proposal)>,
+    item: StdResult<(Vec<u8>, Proposal)>,
 ) -> StdResult<ProposalResponse> {
-    item.map(|(id, prop)| {
+    item.map(|(prop_key, prop)| {
         let status = prop.current_status(block);
         let threshold = prop.threshold.to_response(prop.total_weight);
+        let prop_bytes = &prop_key as &[u8];
+        let prop_string = String::from_utf8(prop_key).unwrap(); //might panic!
         ProposalResponse {
-            id,
+            id: prop_string.parse::<u64>().unwrap(), //might panic!
             title: prop.title,
             description: prop.description,
             msgs: prop.msgs,
@@ -395,16 +395,16 @@ fn list_votes<S: Storage, A: Api, Q: Querier>(
     limit: Option<u32>,
 ) -> StdResult<VoteListResponse> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let start = start_after.map(|s| Bound::ExclusiveRaw(s.into()));
+    let start = start_after.unwrap_or_default().to_string(); //not sure about this
 
-    let votes = BALLOTS
-        .prefix(proposal_id)
-        .range(deps.storage, start, None, Order::Ascending)
+    let votes = ballots_read(&deps.storage)
+        // .prefix(proposal_id) //do I need to revamp the storage strategy first?
+        .range(Some(start.as_bytes()), None, Order::Ascending)
         .take(limit)
         .map(|item| {
             item.map(|(addr, ballot)| VoteInfo {
                 proposal_id,
-                voter: addr.into(),
+                voter: String::from_utf8(addr).unwrap().into(), //might panic!,
                 vote: ballot.vote,
                 weight: ballot.weight,
             })
@@ -429,14 +429,14 @@ fn list_voters<S: Storage, A: Api, Q: Querier>(
     limit: Option<u32>,
 ) -> StdResult<VoterListResponse> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let start = start_after.map(|s| Bound::ExclusiveRaw(s.into()));
+    let start = start_after.unwrap_or_default().to_string(); //not sure about this
 
-    let voters = VOTERS
-        .range(deps.storage, start, None, Order::Ascending)
+    let voters = voters_read(&deps.storage)
+        .range(Some(start.as_bytes()), None, Order::Ascending)
         .take(limit)
         .map(|item| {
             item.map(|(addr, weight)| VoterDetail {
-                addr: addr.into(),
+                addr: String::from_utf8(addr).unwrap().into(), //might panic!
                 weight,
             })
         })
