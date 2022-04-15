@@ -61,7 +61,6 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
 pub fn handle<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    info: MessageInfo,
     msg: HandleMsg,
 ) -> Result<HandleResponse<Empty>, ContractError> {
     match msg {
@@ -70,17 +69,16 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
             description,
             msgs,
             latest,
-        } => execute_propose(deps, env, info, title, description, msgs, latest),
-        HandleMsg::Vote { proposal_id, vote } => execute_vote(deps, env, info, proposal_id, vote),
-        HandleMsg::Execute { proposal_id } => execute_execute(deps, env, info, proposal_id),
-        HandleMsg::Close { proposal_id } => execute_close(deps, env, info, proposal_id),
+        } => execute_propose(deps, env, title, description, msgs, latest),
+        HandleMsg::Vote { proposal_id, vote } => execute_vote(deps, env, proposal_id, vote),
+        HandleMsg::Execute { proposal_id } => execute_execute(deps, env, proposal_id),
+        HandleMsg::Close { proposal_id } => execute_close(deps, env, proposal_id),
     }
 }
 
 pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    info: MessageInfo,
     title: String,
     description: String,
     msgs: Vec<CosmosMsg>,
@@ -89,7 +87,7 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
 ) -> Result<HandleResponse<Empty>, ContractError> {
     // only members of the multisig can create a proposal
     let vote_power = voters_read(&deps.storage)
-        .may_load(&info.sender.to_string().as_bytes())?
+        .may_load(&env.message.sender.to_string().as_bytes())?
         .ok_or(ContractError::Unauthorized {})?;
 
     let cfg = config_read(&deps.storage).load()?;
@@ -147,12 +145,11 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
 pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    info: MessageInfo,
     proposal_id: u64,
     vote: Vote,
 ) -> Result<HandleResponse<Empty>, ContractError> {
     // only members of the multisig with weight >= 1 can vote
-    let voter_power = voters_read(&deps.storage).may_load(&info.sender.to_string().as_bytes())?;
+    let voter_power = voters_read(&deps.storage).may_load(&env.message.sender.to_string().as_bytes())?;
     let vote_power = match voter_power {
         Some(power) if power >= 1 => power,
         _ => return Err(ContractError::Unauthorized {}),
@@ -185,7 +182,7 @@ pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
         messages: vec![],
         log: vec![
             log("action","vote"),
-            log("sender", info.sender),
+            log("sender", env.message.sender),
             log("proposal_id", proposal_id.to_string()),
             log("status", format!("{:?}", prop.status))],
         data: None
@@ -194,8 +191,7 @@ pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
 
 pub fn execute_execute<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
-    _env: Env,
-    info: MessageInfo,
+    env: Env,
     proposal_id: u64,
 ) -> Result<HandleResponse, ContractError> {
     // anyone can trigger this if the vote passed
@@ -216,7 +212,7 @@ pub fn execute_execute<S: Storage, A: Api, Q: Querier>(
         messages: prop.msgs,
         log: vec![
             log("action","execute"),
-            log("sender", info.sender),
+            log("sender", env.message.sender),
             log("proposal_id", proposal_id.to_string())],
         data: None
     })
@@ -225,7 +221,6 @@ pub fn execute_execute<S: Storage, A: Api, Q: Querier>(
 pub fn execute_close<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    info: MessageInfo,
     proposal_id: u64,
 ) -> Result<HandleResponse<Empty>, ContractError> {
     // anyone can trigger this if the vote passed
@@ -250,7 +245,7 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
         messages: vec![],
         log: vec![
             log("action","close"),
-            log("sender", info.sender),
+            log("sender", env.message.sender),
             log("proposal_id", proposal_id.to_string())],
         data: None
     })
@@ -262,20 +257,19 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
 
 pub fn query<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
-    env: Env,
     msg: QueryMsg
 ) -> StdResult<Binary> {
     match msg {
         QueryMsg::Threshold {} => to_binary(&query_threshold(deps)?),
-        QueryMsg::Proposal { proposal_id } => to_binary(&query_proposal(deps, env, proposal_id)?),
+        QueryMsg::Proposal { proposal_id } => to_binary(&query_proposal(deps, proposal_id)?),
         QueryMsg::Vote { proposal_id, voter } => to_binary(&query_vote(deps, proposal_id, voter)?),
         QueryMsg::ListProposals { start_after, limit } => {
-            to_binary(&list_proposals(deps, env, start_after, limit)?)
+            to_binary(&list_proposals(deps, start_after, limit)?)
         },
         QueryMsg::ReverseProposals {
             start_before,
             limit,
-        } => to_binary(&reverse_proposals(deps, env, start_before, limit)?),
+        } => to_binary(&reverse_proposals(deps, start_before, limit)?),
         QueryMsg::ListVotes {
             proposal_id,
             start_after,
@@ -293,16 +287,19 @@ fn query_threshold<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> St
     Ok(cfg.threshold.to_response(cfg.total_weight))
 }
 
-fn query_proposal<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, env: Env, id: u64) -> StdResult<ProposalResponse> {
+fn query_proposal<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, id: u64) -> StdResult<ProposalResponse> {
     let prop = proposals_read(&deps.storage).load(&id.to_le_bytes())?;
-    let status = prop.current_status(&env.block);
+
+    // TODO figure out how to get block info in query
+    // let status = prop.current_status(&env.block);
+
     let threshold = prop.threshold.to_response(prop.total_weight);
     Ok(ProposalResponse {
         id,
         title: prop.title,
         description: prop.description,
         msgs: prop.msgs,
-        status,
+        status: prop.status,
         expires: prop.expires,
         threshold,
     })
@@ -314,7 +311,6 @@ const DEFAULT_LIMIT: u32 = 10;
 
 fn list_proposals<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
-    env: Env,
     start_after: Option<u64>,
     limit: Option<u32>,
 ) -> StdResult<ProposalListResponse> {
@@ -323,7 +319,7 @@ fn list_proposals<S: Storage, A: Api, Q: Querier>(
     let proposals = proposals_read(&deps.storage)
         .range(Some(start.as_bytes()), None, Order::Ascending)
         .take(limit)
-        .map(|p| map_proposal(&deps, &env.block, p))
+        .map(|p| map_proposal(&deps, p))
         .collect::<StdResult<_>>()?;
 
     Ok(ProposalListResponse { proposals })
@@ -331,7 +327,6 @@ fn list_proposals<S: Storage, A: Api, Q: Querier>(
 
 fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
-    env: Env,
     start_before: Option<u64>,
     limit: Option<u32>,
 ) -> StdResult<ProposalListResponse> {
@@ -340,7 +335,7 @@ fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
     let props: StdResult<Vec<_>> = proposals_read(&deps.storage)
         .range(None, Some(end.as_bytes()), Order::Descending)
         .take(limit)
-        .map(|p| map_proposal(&deps, &env.block, p))
+        .map(|p| map_proposal(&deps, p)) // removed &env.block
         .collect();
 
     Ok(ProposalListResponse { proposals: props? })
@@ -348,11 +343,11 @@ fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
 
 fn map_proposal<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
-    block: &BlockInfo,
+    // block: &BlockInfo,
     item: StdResult<(Vec<u8>, Proposal)>,
 ) -> StdResult<ProposalResponse> {
     item.map(|(prop_key, prop)| {
-        let status = prop.current_status(block);
+        // let status = prop.current_status(block);
         let threshold = prop.threshold.to_response(prop.total_weight);
         let prop_bytes = &prop_key as &[u8];
         let prop_string = String::from_utf8(prop_key).unwrap(); //might panic!
@@ -361,7 +356,7 @@ fn map_proposal<S: Storage, A: Api, Q: Querier>(
             title: prop.title,
             description: prop.description,
             msgs: prop.msgs,
-            status,
+            status: prop.status, // using status from last save
             expires: prop.expires,
             threshold,
         }
