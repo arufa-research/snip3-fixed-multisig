@@ -29,9 +29,9 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     msg: InitMsg,
-) -> Result<InitResponse, ContractError> {
+) -> Result<InitResponse, StdError> {
     if msg.voters.is_empty() {
-        return Err(ContractError::NoVoters {});
+        return Err(StdError::generic_err("No voters"));
     }
 
     let total_weight = msg.voters.iter().map(|v| v.weight).sum();
@@ -62,7 +62,7 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     msg: HandleMsg,
-) -> Result<HandleResponse<Empty>, ContractError> {
+) -> Result<HandleResponse<Empty>, StdError> {
     match msg {
         HandleMsg::Propose {
             title,
@@ -84,11 +84,11 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
     msgs: Vec<CosmosMsg>,
     // we ignore earliest
     latest: Option<Expiration>,
-) -> Result<HandleResponse<Empty>, ContractError> {
+) -> Result<HandleResponse<Empty>, StdError> {
     // only members of the multisig can create a proposal
     let vote_power = voters_read(&deps.storage)
         .may_load(&env.message.sender.to_string().as_bytes())?
-        .ok_or(ContractError::Unauthorized {})?;
+        .ok_or(StdError::generic_err("Unauthorized"))?;
 
     let cfg = config_read(&deps.storage).load()?;
 
@@ -99,7 +99,7 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
     if let Some(Ordering::Greater) = comp {
         expires = max_expires;
     } else if comp.is_none() {
-        return Err(ContractError::WrongExpiration {});
+        return Err(StdError::generic_err("Wrong expiration option"));
     }
 
     // create a proposal
@@ -147,26 +147,26 @@ pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
     env: Env,
     proposal_id: u64,
     vote: Vote,
-) -> Result<HandleResponse<Empty>, ContractError> {
+) -> Result<HandleResponse<Empty>, StdError> {
     // only members of the multisig with weight >= 1 can vote
     let voter_power = voters_read(&deps.storage).may_load(&env.message.sender.to_string().as_bytes())?;
     let vote_power = match voter_power {
         Some(power) if power >= 1 => power,
-        _ => return Err(ContractError::Unauthorized {}),
+        _ => return Err(StdError::unauthorized()),
     };
 
     // ensure proposal exists and can be voted on
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     if prop.status != Status::Open {
-        return Err(ContractError::NotOpen {});
+        return Err(StdError::generic_err("Proposal is not open"));
     }
     if prop.expires.is_expired(&env.block) {
-        return Err(ContractError::Expired {});
+        return Err(StdError::generic_err("Proposal voting period has expired"));
     }
 
     // cast vote if no vote previously cast
     ballots(&mut deps.storage).update(&proposal_id.to_string().as_bytes(), |bal| match bal{
-        Some(_) => Err(StdError::GenericErr { msg: ("Already voted".to_string()), backtrace: (None) }), // TODO: figure out how to return ContractError::AlreadyVoted instead of StdError
+        Some(_) => Err(StdError::generic_err("Already voted")),
         None => Ok(Ballot {
             weight: vote_power,
             vote,
@@ -193,14 +193,14 @@ pub fn execute_execute<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     proposal_id: u64,
-) -> Result<HandleResponse, ContractError> {
+) -> Result<HandleResponse, StdError> {
     // anyone can trigger this if the vote passed
 
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     // we allow execution even after the proposal "expiration" as long as all vote come in before
     // that point. If it was approved on time, it can be executed any time.
     if prop.status != Status::Passed {
-        return Err(ContractError::WrongExecuteStatus {});
+        return Err(StdError::generic_err("Proposal must have passed and not yet been executed"));
     }
 
     // set it to executed
@@ -222,7 +222,7 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     proposal_id: u64,
-) -> Result<HandleResponse<Empty>, ContractError> {
+) -> Result<HandleResponse<Empty>, StdError> {
     // anyone can trigger this if the vote passed
 
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
@@ -230,10 +230,10 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
         .iter()
         .any(|x| *x == prop.status)
     {
-        return Err(ContractError::WrongCloseStatus {});
+        return Err(StdError::generic_err("Cannot close completed or passed proposals"));
     }
     if !prop.expires.is_expired(&env.block) {
-        return Err(ContractError::NotExpired {});
+        return Err(StdError::generic_err("Proposal must expire before you can close it"));
     }
 
     // set it to failed

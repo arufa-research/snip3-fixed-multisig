@@ -34,15 +34,15 @@ pub enum Threshold {
 impl Threshold {
     /// returns error if this is an unreachable value,
     /// given a total weight of all members in the group
-    pub fn validate(&self, total_weight: u64) -> Result<(), ThresholdError> {
+    pub fn validate(&self, total_weight: u64) -> Result<(), StdError> {
         match self {
             Threshold::AbsoluteCount {
                 weight: weight_needed,
             } => {
                 if *weight_needed == 0 {
-                    Err(ThresholdError::ZeroWeight {})
+                    Err(StdError::generic_err("Required weight cannot be zero"))
                 } else if *weight_needed > total_weight {
-                    Err(ThresholdError::UnreachableWeight {})
+                    Err(StdError::generic_err("Not possible to reach required (passing) weight"))
                 } else {
                     Ok(())
                 }
@@ -83,20 +83,20 @@ impl Threshold {
 }
 
 /// Asserts that the 0.5 < percent <= 1.0
-fn valid_threshold(percent: &Decimal) -> Result<(), ThresholdError> {
+fn valid_threshold(percent: &Decimal) -> Result<(), StdError> {
     if *percent > Decimal::percent(100) || *percent < Decimal::percent(50) {
-        Err(ThresholdError::InvalidThreshold {})
+        Err(StdError::generic_err("Invalid voting threshold percentage, must be in the 0.5-1.0 range"))
     } else {
         Ok(())
     }
 }
 
 /// Asserts that the 0.5 < percent <= 1.0
-fn valid_quorum(percent: &Decimal) -> Result<(), ThresholdError> {
+fn valid_quorum(percent: &Decimal) -> Result<(), StdError> {
     if percent.is_zero() {
-        Err(ThresholdError::ZeroQuorumThreshold {})
+        Err(StdError::generic_err("Required quorum threshold cannot be zero"))
     } else if *percent > Decimal::one() {
-        Err(ThresholdError::UnreachableQuorumThreshold {})
+        Err(StdError::generic_err("Not possible to reach required quorum threshold"))
     } else {
         Ok(())
     }
