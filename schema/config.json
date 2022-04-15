@@ -1,11 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "InitMsg",
+  "title": "Config",
   "type": "object",
   "required": [
     "max_voting_period",
     "threshold",
-    "voters"
+    "total_weight"
   ],
   "properties": {
     "max_voting_period": {
@@ -14,11 +14,10 @@
     "threshold": {
       "$ref": "#/definitions/Threshold"
     },
-    "voters": {
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/Voter"
-      }
+    "total_weight": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
     }
   },
   "definitions": {
@@ -128,23 +127,6 @@
           }
         }
       ]
-    },
-    "Voter": {
-      "type": "object",
-      "required": [
-        "addr",
-        "weight"
-      ],
-      "properties": {
-        "addr": {
-          "type": "string"
-        },
-        "weight": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        }
-      }
     }
   }
 }
