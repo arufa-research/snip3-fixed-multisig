@@ -4,7 +4,7 @@ use std::fmt;
 
 use cosmwasm_std::{CosmosMsg, Empty};
 
-use crate::msg::Vote;
+use crate::msg::{Vote, Voter};
 use crate::expiration::Expiration;
 use crate::threshold::ThresholdResponse;
 
@@ -76,7 +76,7 @@ pub struct VoterResponse {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
 pub struct VoterListResponse {
-    pub voters: Vec<VoterDetail>,
+    pub voters: Vec<Voter>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]

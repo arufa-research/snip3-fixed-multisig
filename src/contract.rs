@@ -4,25 +4,23 @@ use std::cmp::Ordering;
 
 use cosmwasm_std::{
     log, debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier,
-    StdError, StdResult, Storage, HumanAddr, MessageInfo, CosmosMsg, Empty, BlockInfo
+    StdError, StdResult, Storage, HumanAddr, MessageInfo, CosmosMsg, Empty, BlockInfo, ReadonlyStorage
 };
 
-use cosmwasm_std::{Order, KV};
+// use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
+// use secret_toolkit::serialization::{Bincode2, Serde};
+// use secret_toolkit::storage::AppendStore;
 
-use cosmwasm_storage::{ReadonlyBucket};
-// use cw_storage_plus::Bound;
-// use cw_utils::{Expiration, ThresholdResponse};
-
-use crate::error::ContractError;
-use crate::expiration::{Duration, Expiration};
-use crate::msg::{HandleMsg, InitMsg, QueryMsg, Vote, Voter};
+// use crate::error::ContractError;
+use crate::expiration::{ Duration, Expiration };
+use crate::msg::{ HandleMsg, InitMsg, QueryMsg, Vote, Voter };
 use crate::query::{
     ProposalListResponse, ProposalResponse, VoteInfo, VoteListResponse, VoteResponse,
     VoterDetail, VoterListResponse, VoterResponse, Status
 };
-use crate::state::{config, config_read, voters, voters_read, proposal_count, proposal_count_read,
-                    ballots, ballots_read, proposals, proposals_read};
-use crate::state::{Ballot, Config, Proposal, Votes};
+use crate::state::{ config, config_read, voters, voters_read, proposal_count, proposal_count_read,
+                    ballots, ballots_read, proposals, proposals_read, voters_list, voters_list_read };
+use crate::state::{ Ballot, Config, Proposal, Votes, PROPOSALS_KEY, VOTERS_KEY, VOTERS_LIST_KEY};
 use crate::threshold::ThresholdResponse;
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
@@ -37,6 +35,7 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     let total_weight = msg.voters.iter().map(|v| v.weight).sum();
 
     msg.threshold.validate(total_weight)?;
+    // TODO add a method to validate the addresses
 
     let cfg = Config {
         threshold: msg.threshold,
@@ -44,13 +43,15 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
         max_voting_period: msg.max_voting_period,
     };
 
+    // save the configuration settings
     config(&mut deps.storage).save(&cfg)?;
 
-    // add all voters
+    // save the list of Voters
+    voters_list(&mut deps.storage).save(&msg.voters)?;
+    
+    // save each voter's address and weight in a key-value pair
     for voter in msg.voters.iter() {
-        // I had to remove the addr_validate method because it's not available in the 0.10 API trait
-        let key = voter.addr.as_bytes();
-        voters(&mut deps.storage).save(key, &voter.weight)?;
+        voters(&mut deps.storage).save(voter.addr.as_bytes(), &voter.weight)?;
     }
 
     debug_print!("Contract was initialized by {}", env.message.sender);
@@ -86,7 +87,7 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
     latest: Option<Expiration>,
 ) -> Result<HandleResponse<Empty>, StdError> {
     // only members of the multisig can create a proposal
-    let vote_power = voters_read(&deps.storage)
+    let vote_power: u64 = voters_read(&deps.storage)
         .may_load(&env.message.sender.to_string().as_bytes())?
         .ok_or(StdError::generic_err("Unauthorized"))?;
 
@@ -126,11 +127,8 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
         weight: vote_power,
         vote: Vote::Yes,
     };
-    ballots(&mut deps.storage).save(&proposal_id.to_string().as_bytes(),&ballot)?;
-    //need to figure out how to do the "double mapping"
-    //ie. store both the proposal ID and the voter address...
+    ballots(&mut deps.storage, proposal_id).save(&env.message.sender.to_string().as_bytes(),&ballot)?;
 
-    // TODO figure out how to do responses on secret
     Ok(HandleResponse {
         messages: vec![],
         log: vec![
@@ -164,14 +162,13 @@ pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
         return Err(StdError::generic_err("Proposal voting period has expired"));
     }
 
-    // cast vote if no vote previously cast
-    ballots(&mut deps.storage).update(&proposal_id.to_string().as_bytes(), |bal| match bal{
-        Some(_) => Err(StdError::generic_err("Already voted")),
-        None => Ok(Ballot {
-            weight: vote_power,
-            vote,
-        }),
-    })?;
+    // TODO check if the person has already voted before trying to save
+    let ballot = Ballot {
+        weight: vote_power,
+        vote,
+    };
+
+    ballots(&mut deps.storage, proposal_id).save(&env.message.sender.to_string().as_bytes(),&ballot)?;
 
     // update vote tally
     prop.votes.add_vote(vote, vote_power);
@@ -306,21 +303,40 @@ fn query_proposal<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, id: u6
 }
 
 // settings for pagination
-const MAX_LIMIT: u32 = 30;
-const DEFAULT_LIMIT: u32 = 10;
+// const MAX_LIMIT: u32 = 30;
+// const DEFAULT_LIMIT: u32 = 10;
+// let's figure out the limit stuff later
+// for now, return the full list every time
 
 fn list_proposals<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     start_after: Option<u64>,
     limit: Option<u32>,
 ) -> StdResult<ProposalListResponse> {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let start = start_after.unwrap_or_default().to_string(); //not sure about this
-    let proposals = proposals_read(&deps.storage)
-        .range(Some(start.as_bytes()), None, Order::Ascending)
-        .take(limit)
-        .map(|p| map_proposal(&deps, p))
-        .collect::<StdResult<_>>()?;
+    let latest_prop = proposal_count_read(&deps.storage).load()?;
+
+    // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).into();
+    // let start = start_after.unwrap_or(1);
+    let start = 1;
+    let limit = latest_prop;
+    
+    let mut proposals: Vec<ProposalResponse> = vec![];
+    let mut i = start;
+    while i < limit {
+        let prop = proposals_read(&deps.storage).load(&i.to_le_bytes())?;
+        let threshold = prop.threshold.to_response(prop.total_weight);
+        let prop_response = ProposalResponse {
+            id: i,
+            title: prop.title,
+            description: prop.description,
+            msgs: prop.msgs,
+            status: prop.status, //using status from last save (it may have expired since then)
+            expires: prop.expires,
+            threshold,
+        };
+        proposals.push(prop_response);
+        i = i+1;
+    }
 
     Ok(ProposalListResponse { proposals })
 }
@@ -330,33 +346,49 @@ fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
     start_before: Option<u64>,
     limit: Option<u32>,
 ) -> StdResult<ProposalListResponse> {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let end = start_before.unwrap_or_default().to_string(); //not sure about this
-    let props: StdResult<Vec<_>> = proposals_read(&deps.storage)
-        .range(None, Some(end.as_bytes()), Order::Descending)
-        .take(limit)
-        .map(|p| map_proposal(&deps, p)) // removed &env.block
-        .collect();
+    let latest_prop = proposal_count_read(&deps.storage).load()?;
 
-    Ok(ProposalListResponse { proposals: props? })
-}
-
-fn map_proposal<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
-    // block: &BlockInfo,
-    item: StdResult<(Vec<u8>, Proposal)>,
-) -> StdResult<ProposalResponse> {
-    item.map(|(prop_key, prop)| {
-        // let status = prop.current_status(block);
+    // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).into();
+    // let start = start_before.unwrap_or(latest_prop);
+    let start = latest_prop;
+    let limit = 1;
+    
+    let mut proposals: Vec<ProposalResponse> = vec![];
+    let mut i = start;
+    while i > limit {
+        let prop = proposals_read(&deps.storage).load(&i.to_le_bytes())?;
         let threshold = prop.threshold.to_response(prop.total_weight);
-        let prop_bytes = &prop_key as &[u8];
-        let prop_string = String::from_utf8(prop_key).unwrap(); //might panic!
-        ProposalResponse {
-            id: prop_string.parse::<u64>().unwrap(), //might panic!
+        let prop_response = ProposalResponse {
+            id: i,
             title: prop.title,
             description: prop.description,
             msgs: prop.msgs,
-            status: prop.status, // using status from last save
+            status: prop.status, //using status from last save (it may have expired since then)
+            expires: prop.expires,
+            threshold,
+        };
+        proposals.push(prop_response);
+        i = i-1;
+    }
+
+    Ok(ProposalListResponse { proposals })
+}
+
+// not currently using this...
+fn map_proposal<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    // block: &BlockInfo,
+    item: StdResult<(u64, Proposal)>,
+) -> StdResult<ProposalResponse> {
+    item.map(|(id, prop)| {
+        // let status = prop.current_status(block);
+        let threshold = prop.threshold.to_response(prop.total_weight);
+        ProposalResponse {
+            id,
+            title: prop.title,
+            description: prop.description,
+            msgs: prop.msgs,
+            status: prop.status, //using status from last save (it may have expired since then)
             expires: prop.expires,
             threshold,
         }
@@ -368,12 +400,9 @@ fn query_vote<S: Storage, A: Api, Q: Querier>(
     proposal_id: u64,
     voter: String
 ) -> StdResult<VoteResponse> {
-    let voter = &voter; // TODO: figure out a way to validate the address
-    // TODO: currently ballots_read only returns a Ballot structs per proposal_id key.
-    // There's no way to differentiate the ballots per voter address.
-    // Probably need to implement sub-buckets...
-    let ballot = ballots_read(&deps.storage).may_load(proposal_id.to_string().as_bytes())?;
-    // let ballot = BALLOTS.may_load(deps.storage, (proposal_id, &voter))?;
+    // TODO: figure out a way to validate the address
+
+    let ballot = ballots_read(&deps.storage, proposal_id).may_load(voter.as_bytes())?;
     let vote = ballot.map(|b| VoteInfo {
         proposal_id,
         voter: voter.into(),
@@ -383,38 +412,25 @@ fn query_vote<S: Storage, A: Api, Q: Querier>(
     Ok(VoteResponse { vote })
 }
 
+// not sure this will be possible to implement
 fn list_votes<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     proposal_id: u64,
     start_after: Option<String>,
     limit: Option<u32>,
 ) -> StdResult<VoteListResponse> {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let start = start_after.unwrap_or_default().to_string(); //not sure about this
+    // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+    // let start = start_after.unwrap_or_default().to_string(); //not sure about this
 
-    let votes = ballots_read(&deps.storage)
-        // .prefix(proposal_id) //do I need to revamp the storage strategy first?
-        .range(Some(start.as_bytes()), None, Order::Ascending)
-        .take(limit)
-        .map(|item| {
-            item.map(|(addr, ballot)| VoteInfo {
-                proposal_id,
-                voter: String::from_utf8(addr).unwrap().into(), //might panic!,
-                vote: ballot.vote,
-                weight: ballot.weight,
-            })
-        })
-        .collect::<StdResult<_>>()?;
-
-    Ok(VoteListResponse { votes })
+    Ok(VoteListResponse { votes: todo!() })
 }
 
 fn query_voter<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     voter: String
 ) -> StdResult<VoterResponse> {
-    let voter = &voter; // TODO: figure out a way to validate the address
-    let weight = voters_read(&deps.storage).may_load(&voter.to_string().as_bytes())?;
+    // TODO: figure out a way to validate the address
+    let weight = voters_read(&deps.storage).may_load(&voter.as_bytes())?;
     Ok(VoterResponse { weight })
 }
 
@@ -423,19 +439,10 @@ fn list_voters<S: Storage, A: Api, Q: Querier>(
     start_after: Option<String>,
     limit: Option<u32>,
 ) -> StdResult<VoterListResponse> {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let start = start_after.unwrap_or_default().to_string(); //not sure about this
+    // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+    // let start = start_after.unwrap_or_default();
 
-    let voters = voters_read(&deps.storage)
-        .range(Some(start.as_bytes()), None, Order::Ascending)
-        .take(limit)
-        .map(|item| {
-            item.map(|(addr, weight)| VoterDetail {
-                addr: String::from_utf8(addr).unwrap().into(), //might panic!
-                weight,
-            })
-        })
-        .collect::<StdResult<_>>()?;
+    let voters = voters_list_read(&deps.storage).load()?;
 
     Ok(VoterListResponse { voters })
 }

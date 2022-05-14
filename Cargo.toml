@@ -39,8 +39,8 @@ serde = { version = "1.0.103", default-features = false, features = ["derive"] }
 schemars = "0.7"
 cosmwasm-std = { package = "secret-cosmwasm-std", version = "0.10" }
 # cosmwasm-beta = { package= "cosmwasm-std", version = "1.0.0-beta6"}
-cosmwasm-storage = { package = "secret-cosmwasm-storage", version = "0.10", features = ["iterator"] }
-# secret-toolkit = "0.2.0" # Uncomment this for extra tools
+cosmwasm-storage = { package = "secret-cosmwasm-storage", version = "0.10" }
+secret-toolkit = { version = "0.2.0", features = ["storage"] }
 thiserror = { version = "1.0.23" }
 # cw3 = "0.13.1"
 # cw-storage-plus = "0.13.1"

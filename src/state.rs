@@ -1,16 +1,18 @@
 #![allow(unused)]
+use std::any::type_name;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use cosmwasm_std::{ BlockInfo, Storage, CosmosMsg, Empty };
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use cosmwasm_std::{ BlockInfo, Storage, ReadonlyStorage, CosmosMsg, Empty, StdResult, StdError, HumanAddr };
 use crate::math::{Decimal, Uint128};
 
-use cosmwasm_storage::{ Singleton, ReadonlySingleton, Bucket, ReadonlyBucket, 
-    singleton, singleton_read, bucket, bucket_read};
+use cosmwasm_storage::{ Singleton, ReadonlySingleton, Bucket, ReadonlyBucket, PrefixedStorage, 
+    singleton, singleton_read, bucket, bucket_read, ReadonlyPrefixedStorage, prefixed, prefixed_read};
 
-// use cw3::{Status};
-// use cw_storage_plus::{Item, Map};
-// use cw_utils::{ Threshold };
+use secret_toolkit::{
+    storage::{append_store, AppendStore, AppendStoreMut},
+    serialization::{Bincode2, Json, Serde},
+};
 
 use crate::expiration::{ Expiration, Duration };
 use crate::msg::{ Voter, Vote };
@@ -22,6 +24,7 @@ pub static PROPOSAL_COUNT_KEY: &[u8] = b"proposal_count";
 pub static BALLOTS_KEY: &[u8] = b"votes";
 pub static PROPOSALS_KEY: &[u8] = b"proposals";
 pub static VOTERS_KEY: &[u8] = b"voters";
+pub static VOTERS_LIST_KEY: &[u8] = b"list_of_voters";
 
 pub const PREFIX_PROPOSAL_KEY: &[u8] = b"prefix";
 
@@ -53,12 +56,12 @@ pub fn proposal_count_read<S: Storage>(storage: &S) -> ReadonlySingleton<S, u64>
 }
 
 // Ballots Read/Write functions
-pub fn ballots<S: Storage>(storage: &mut S) -> Bucket<S, Ballot> {
-    bucket(BALLOTS_KEY, storage)
+pub fn ballots<S: Storage>(storage: &mut S, id: u64) -> Bucket<S, Ballot> {
+    Bucket::multilevel(&[BALLOTS_KEY, &id.to_le_bytes()], storage)
 }
 
-pub fn ballots_read<S: Storage>(storage: &S) -> ReadonlyBucket<S, Ballot> {
-    bucket_read(BALLOTS_KEY, storage)
+pub fn ballots_read<S: Storage>(storage: &S, id: u64) -> ReadonlyBucket<S, Ballot> {
+    ReadonlyBucket::multilevel(&[BALLOTS_KEY, &id.to_le_bytes()], storage)
 }
 
 // Proposals Read/Write functions
@@ -71,12 +74,21 @@ pub fn proposals_read<S: Storage>(storage: &S) -> ReadonlyBucket<S, Proposal> {
 }
 
 // Voters Read/Write functions
+
 pub fn voters<S: Storage>(storage: &mut S) -> Bucket<S, u64> {
-    bucket(VOTERS_KEY, storage )
+    bucket(VOTERS_KEY, storage)
 }
 
 pub fn voters_read<S: Storage>(storage: &S) -> ReadonlyBucket<S, u64> {
-    bucket_read(VOTERS_KEY, storage )
+    bucket_read(VOTERS_KEY, storage)
+}
+
+pub fn voters_list<S: Storage>(storage: &mut S) -> Singleton<S, Vec<Voter>> {
+    singleton(storage, VOTERS_LIST_KEY)
+}
+
+pub fn voters_list_read<S: Storage>(storage: &S) -> ReadonlySingleton<S, Vec<Voter>> {
+    singleton_read(storage, VOTERS_LIST_KEY)
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
