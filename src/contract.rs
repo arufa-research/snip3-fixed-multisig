@@ -54,6 +54,9 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
         voters(&mut deps.storage).save(voter.addr.as_bytes(), &voter.weight)?;
     }
 
+    // set initial value for proposal count
+    proposal_count(&mut deps.storage).save(&0);
+
     debug_print!("Contract was initialized by {}", env.message.sender);
 
     Ok(InitResponse::default())
@@ -322,7 +325,7 @@ fn list_proposals<S: Storage, A: Api, Q: Querier>(
     
     let mut proposals: Vec<ProposalResponse> = vec![];
     let mut i = start;
-    while i < limit {
+    while i <= limit {
         let prop = proposals_read(&deps.storage).load(&i.to_le_bytes())?;
         let threshold = prop.threshold.to_response(prop.total_weight);
         let prop_response = ProposalResponse {
@@ -355,7 +358,7 @@ fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
     
     let mut proposals: Vec<ProposalResponse> = vec![];
     let mut i = start;
-    while i > limit {
+    while i >= limit {
         let prop = proposals_read(&deps.storage).load(&i.to_le_bytes())?;
         let threshold = prop.threshold.to_response(prop.total_weight);
         let prop_response = ProposalResponse {
