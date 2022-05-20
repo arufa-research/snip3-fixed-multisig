@@ -35,7 +35,7 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     let total_weight = msg.voters.iter().map(|v| v.weight).sum();
 
     msg.threshold.validate(total_weight)?;
-    // TODO add a method to validate the addresses
+    // TODO Implement address validation
 
     let cfg = Config {
         threshold: msg.threshold,
@@ -252,8 +252,6 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
 }
 
 // Queries and query functions
-// TODO: fix up these functions:
-// reverse_proposals, list_votes, list_voters
 
 pub fn query<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
@@ -290,7 +288,7 @@ fn query_threshold<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> St
 fn query_proposal<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, id: u64) -> StdResult<ProposalResponse> {
     let prop = proposals_read(&deps.storage).load(&id.to_le_bytes())?;
 
-    // TODO figure out how to get block info in query
+    // TODO Uncomment this line once block info is available to queries
     // let status = prop.current_status(&env.block);
 
     let threshold = prop.threshold.to_response(prop.total_weight);
@@ -299,7 +297,7 @@ fn query_proposal<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, id: u6
         title: prop.title,
         description: prop.description,
         msgs: prop.msgs,
-        status: prop.status,
+        status: prop.status, //using status from last save (it may have expired since then)
         expires: prop.expires,
         threshold,
     })
@@ -403,7 +401,7 @@ fn query_vote<S: Storage, A: Api, Q: Querier>(
     proposal_id: u64,
     voter: String
 ) -> StdResult<VoteResponse> {
-    // TODO: figure out a way to validate the address
+    // TODO: Implement address validation
 
     let ballot = ballots_read(&deps.storage, proposal_id).may_load(voter.as_bytes())?;
     let vote = ballot.map(|b| VoteInfo {
@@ -415,7 +413,6 @@ fn query_vote<S: Storage, A: Api, Q: Querier>(
     Ok(VoteResponse { vote })
 }
 
-// not sure this will be possible to implement
 fn list_votes<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     proposal_id: u64,
@@ -425,14 +422,35 @@ fn list_votes<S: Storage, A: Api, Q: Querier>(
     // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
     // let start = start_after.unwrap_or_default().to_string(); //not sure about this
 
-    Ok(VoteListResponse { votes: todo!() })
+    let voters = voters_list_read(&deps.storage).load()?;
+
+    let voter_count = voters.len();
+
+    let mut votes: Vec<VoteInfo> = Vec::new();
+   
+    for voter in voters {
+        let ballot = ballots_read(&deps.storage, proposal_id).may_load(&voter.addr.as_bytes()).unwrap();
+
+        if ballot.is_some() {
+            let vote_info = VoteInfo {
+                proposal_id,
+                voter: voter.addr,
+                vote: ballot.unwrap().vote,
+                weight: voter.weight,
+            };
+            votes.push(vote_info);
+        } 
+    }
+
+
+    Ok(VoteListResponse { votes })
 }
 
 fn query_voter<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     voter: String
 ) -> StdResult<VoterResponse> {
-    // TODO: figure out a way to validate the address
+    // TODO: Implement address validation
     let weight = voters_read(&deps.storage).may_load(&voter.as_bytes())?;
     Ok(VoterResponse { weight })
 }
@@ -452,11 +470,11 @@ fn list_voters<S: Storage, A: Api, Q: Querier>(
 
 // #[cfg(test)]
 // mod tests {
-//     use cosmwasm_beta::testing::{mock_dependencies, mock_env, mock_info};
-//     use cosmwasm_beta::{coin, from_binary, BankMsg, Decimal};
+//     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
+//     use cosmwasm_std::{coin, from_binary, BankMsg, Decimal};
 
-//     use cw2::{get_contract_version, ContractVersion};
-//     use cw_utils::{Duration, Threshold};
+//     use crate::expiration::Duration;
+//     use crate::threshold::Threshold;
 
 //     use crate::msg::Voter;
 
@@ -525,7 +543,7 @@ fn list_voters<S: Storage, A: Api, Q: Querier>(
 //             limit: None,
 //         };
 //         let votes: VoteListResponse =
-//             from_binary(&query(deps, mock_env(), voters).unwrap()).unwrap();
+//             from_binary(&query(deps, voters).unwrap()).unwrap();
 //         // Sum the weights of the Yes votes to get the tally
 //         votes
 //             .votes
@@ -533,7 +551,7 @@ fn list_voters<S: Storage, A: Api, Q: Querier>(
 //             .filter(|&v| v.vote == Vote::Yes)
 //             .map(|v| v.weight)
 //             .sum()
-//     }
+//     }}
 
 //     #[test]
 //     fn test_instantiate_works() {

@@ -3,10 +3,11 @@ import { Wallet, SecretNetworkClient, fromUtf8 } from "secretjs";
 import fs from "fs";
 import assert from "assert";
 
+let wallet_c: string;
+
 // Returns a client with which we can interact with secret network
-const initializeClient = async (endpoint: string, chainId: string) => {
+const initializeClientA = async (endpoint: string, chainId: string) => {
   const wallet = new Wallet(); // Use default constructor of wallet to generate random mnemonic.
-  const wallet_b = new Wallet();
   const accAddress = wallet.address;
   const client = await SecretNetworkClient.create({
     // Create a client to interact with the network
@@ -20,18 +21,50 @@ const initializeClient = async (endpoint: string, chainId: string) => {
   return client;
 };
 
+const initializeClientB = async (endpoint: string, chainId: string) => {
+  const wallet = new Wallet(); // Use default constructor of wallet to generate random mnemonic.
+  const accAddress = wallet.address;
+  const client = await SecretNetworkClient.create({
+    // Create a client to interact with the network
+    grpcWebUrl: endpoint,
+    chainId: chainId,
+    wallet: wallet,
+    walletAddress: accAddress,
+  });
+
+  console.log(`Initialized client B with wallet address: ${accAddress}`);
+  return client;
+};
+
+const initializeClientC = async (endpoint: string, chainId: string) => {
+  const wallet = new Wallet(); // Use default constructor of wallet to generate random mnemonic.
+  const accAddress = wallet.address;
+  const client = await SecretNetworkClient.create({
+    // Create a client to interact with the network
+    grpcWebUrl: endpoint,
+    chainId: chainId,
+    wallet: wallet,
+    walletAddress: accAddress,
+  });
+
+  console.log(`Initialized client C with wallet address: ${accAddress}`);
+  return client;
+};
+
 // Stores and instantiaties a new contract in our network
 const initializeContract = async (
-  client: SecretNetworkClient,
+  client_a: SecretNetworkClient,
+  client_b: SecretNetworkClient,
+  client_c: SecretNetworkClient,
   contractPath: string
 ) => {
   const wasmCode = fs.readFileSync(contractPath);
   console.log("Uploading contract");
 
-  const uploadReceipt = await client.tx.compute.storeCode(
+  const uploadReceipt = await client_a.tx.compute.storeCode(
     {
       wasmByteCode: wasmCode,
-      sender: client.address,
+      sender: client_a.address,
       source: "",
       builder: "",
     },
@@ -56,15 +89,15 @@ const initializeContract = async (
   const codeId = Number(codeIdKv!.value);
   console.log("Contract codeId: ", codeId);
 
-  const contractCodeHash = await client.query.compute.codeHash(codeId);
+  const contractCodeHash = await client_a.query.compute.codeHash(codeId);
   console.log(`Contract hash: ${contractCodeHash}`);
 
-  const contract = await client.tx.compute.instantiateContract(
+  const contract = await client_a.tx.compute.instantiateContract(
     {
-      sender: client.address,
+      sender: client_a.address,
       codeId,
       initMsg: {
-        voters: [{addr: client.address, weight: 1},{addr: "voter 2", weight: 1},{addr: "voter 3", weight: 1}],
+        voters: [{addr: client_a.address, weight: 1},{addr: client_b.address, weight: 1},{addr: client_c.address, weight: 1}],
         threshold: { absolute_count: {weight: 2} },
         max_voting_period: {height: 1000}
       },
@@ -125,17 +158,27 @@ async function initializeAndUploadContract() {
   let endpoint = "http://localhost:9091";
   let chainId = "secretdev-1";
 
-  const client = await initializeClient(endpoint, chainId);
+  const client_a = await initializeClientA(endpoint, chainId);
+  const client_b = await initializeClientB(endpoint, chainId);
+  const client_c = await initializeClientC(endpoint, chainId);
 
-  await fillUpFromFaucet(client, 100_000_000);
+
+  await fillUpFromFaucet(client_a, 100_000_000);
+  await fillUpFromFaucet(client_b, 100_000_000);
+  await fillUpFromFaucet(client_c, 100_000_000);
+
 
   const [contractHash, contractAddress] = await initializeContract(
-    client,
+    client_a,
+    client_b,
+    client_c,
     "contract.wasm.gz"
   );
 
-  var clientInfo: [SecretNetworkClient, string, string] = [
-    client,
+  var clientInfo: [SecretNetworkClient, SecretNetworkClient, SecretNetworkClient, string, string] = [
+    client_a,
+    client_b,
+    client_c,
     contractHash,
     contractAddress,
   ];
@@ -262,7 +305,6 @@ async function queryVote(
   contractHash: string,
   contractAddress: string,
 ) {
-
   enum Vote {
     Yes,
     No,
@@ -297,7 +339,34 @@ async function queryListVotes(  client: SecretNetworkClient,
   contractHash: string,
   contractAddress: string
 ) {
-  // this function is not yet implemented in the contract
+  enum Vote {
+    Yes,
+    No,
+    Abstain,
+    Veto
+  }
+
+  type VoteInfo = {
+    proposal_id: number,
+    voter: String,
+    vote: Vote,
+    weight: number,
+  };
+  
+  type VoteListResponse = { votes: VoteInfo[] };
+
+  const voteListResponse = (await client.query.compute.queryContract({
+    contractAddress: contractAddress,
+    codeHash: contractHash,
+    query: { list_votes: { proposal_id: 1 } }
+  })) as VoteListResponse;
+
+  if ('err"' in voteListResponse) {
+    throw new Error(
+      `Query failed with the following err: ${JSON.stringify(voteListResponse)}`
+    );
+  }
+  console.log(voteListResponse);
 }
 
 async function queryListVoters(
@@ -327,7 +396,7 @@ async function queryListVoters(
   console.log(voterListResponse);
 }
 
-async function createProposal1(
+async function handleProposal1(
   client: SecretNetworkClient,
   contractHash: string,
   contractAddress: string
@@ -355,7 +424,7 @@ async function createProposal1(
   console.log(`Create Propsosal TX used ${tx.gasUsed} gas`);
 }
 
-async function createProposal2(
+async function handleProposal2(
   client: SecretNetworkClient,
   contractHash: string,
   contractAddress: string
@@ -383,7 +452,7 @@ async function createProposal2(
   console.log(`Create Propsosal 2 TX used ${tx.gasUsed} gas`);
 }
 
-async function createProposal3(
+async function handleProposal3(
   client: SecretNetworkClient,
   contractHash: string,
   contractAddress: string
@@ -411,17 +480,93 @@ async function createProposal3(
   console.log(`Create Propsosal 3 TX used ${tx.gasUsed} gas`);
 }
 
-async function test_proposals(
+async function handleVoteYes(
   client: SecretNetworkClient,
   contractHash: string,
   contractAddress: string
 ) {
-  await createProposal1(client, contractHash, contractAddress);
-  await createProposal2(client, contractHash, contractAddress);
-  await createProposal3(client, contractHash, contractAddress);
-  let tx1 = await queryProposal(client, contractHash, contractAddress, 1);
-  let tx2 = await queryProposal(client, contractHash, contractAddress, 2);
-  let tx3 = await queryProposal(client, contractHash, contractAddress, 3);
+  const tx = await client.tx.compute.executeContract(
+    {
+      sender: client.address,
+      contractAddress: contractAddress,
+      codeHash: contractHash,
+      msg: {
+        vote: {
+          proposal_id: 1,
+          vote: "yes",
+         },
+      },
+      sentFunds: [],
+    },
+    {
+      gasLimit: 200000,
+    }
+  );
+  console.log(tx);
+  console.log(`Vote TX used ${tx.gasUsed} gas`);
+}
+
+async function handleExecute(
+  client: SecretNetworkClient,
+  contractHash: string,
+  contractAddress: string
+) {
+  const tx = await client.tx.compute.executeContract(
+    {
+      sender: client.address,
+      contractAddress: contractAddress,
+      codeHash: contractHash,
+      msg: {
+        execute: {
+          proposal_id: 1
+         },
+      },
+      sentFunds: [],
+    },
+    {
+      gasLimit: 200000,
+    }
+  );
+  console.log(tx);
+  console.log(`Execute Propsosal TX used ${tx.gasUsed} gas`);
+}
+
+async function handleClose(
+  client: SecretNetworkClient,
+  contractHash: string,
+  contractAddress: string
+) {
+  const tx = await client.tx.compute.executeContract(
+    {
+      sender: client.address,
+      contractAddress: contractAddress,
+      codeHash: contractHash,
+      msg: {
+        close: {
+          proposal_id: 1
+         },
+      },
+      sentFunds: [],
+    },
+    {
+      gasLimit: 200000,
+    }
+  );
+  console.log(tx);
+  console.log(`Close Propsosal TX used ${tx.gasUsed} gas`);
+}
+
+async function create_proposals(
+  client: SecretNetworkClient,
+  contractHash: string,
+  contractAddress: string
+) {
+  await handleProposal1(client, contractHash, contractAddress);
+  await handleProposal2(client, contractHash, contractAddress);
+  await handleProposal3(client, contractHash, contractAddress);
+  // let tx1 = await queryProposal(client, contractHash, contractAddress, 1);
+  // let tx2 = await queryProposal(client, contractHash, contractAddress, 2);
+  // let tx3 = await queryProposal(client, contractHash, contractAddress, 3);
 }
 
 async function runTestFunction(
@@ -440,42 +585,54 @@ async function runTestFunction(
 }
 
 (async () => {
-  const [client, contractHash, contractAddress] =
+  const [client_a, client_b, client_c, contractHash, contractAddress] =
     await initializeAndUploadContract();
 
   await runTestFunction(
     queryThreshold,
-    client,
+    client_a,
     contractHash,
     contractAddress
   );
   await runTestFunction(
-    test_proposals,
-    client,
+    create_proposals,
+    client_a,
     contractHash,
     contractAddress
   );
   await runTestFunction(
     queryListProposals,
-    client,
+    client_a,
     contractHash,
     contractAddress
   );
   await runTestFunction(
     queryReverseProposals,
-    client,
+    client_a,
+    contractHash,
+    contractAddress
+  );
+  await runTestFunction(
+    handleVoteYes,
+    client_c, // c votes "yes"
+    contractHash,
+    contractAddress
+  );
+  await runTestFunction(
+    queryListVotes,
+    client_a,
     contractHash,
     contractAddress
   );
   await runTestFunction(
     queryListVoters,
-    client,
+    client_a,
     contractHash,
     contractAddress
   );
   await runTestFunction(
     queryVote,
-    client,
+    client_a,
     contractHash,
     contractAddress
   );
