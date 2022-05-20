@@ -1,22 +1,14 @@
-#![allow(unused)]
-use std::any::type_name;
-
 use schemars::JsonSchema;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use cosmwasm_std::{ BlockInfo, Storage, ReadonlyStorage, CosmosMsg, Empty, StdResult, StdError, HumanAddr };
-use crate::math::{Decimal, Uint128};
+use serde::{ Deserialize, Serialize };
+use cosmwasm_std::{ BlockInfo, Storage, CosmosMsg, Empty };
+use crate::math::{ Decimal, Uint128 };
 
-use cosmwasm_storage::{ Singleton, ReadonlySingleton, Bucket, ReadonlyBucket, PrefixedStorage, 
-    singleton, singleton_read, bucket, bucket_read, ReadonlyPrefixedStorage, prefixed, prefixed_read};
+use cosmwasm_storage::{ Singleton, ReadonlySingleton, Bucket, ReadonlyBucket, 
+    singleton, singleton_read, bucket, bucket_read };
 
-// use secret_toolkit::{
-//     storage::{append_store, AppendStore, AppendStoreMut},
-//     serialization::{Bincode2, Json, Serde},
-// };
-
-use crate::expiration::{ Expiration, Duration };
+use crate::expiration::Duration;
 use crate::msg::{ Voter, Vote };
-use crate::query::{Status};
+use crate::query::Status;
 use crate::threshold::Threshold;
 
 pub static CONFIG_KEY: &[u8] = b"config";
@@ -255,6 +247,7 @@ mod test {
     use super::*;
     use cosmwasm_std::testing::mock_env;
     use cosmwasm_std::Coin;
+    use crate::expiration::Expiration;
 
     #[test]
     fn count_votes() {

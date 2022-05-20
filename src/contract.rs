@@ -1,26 +1,17 @@
-#![allow(unused)]
-
 use std::cmp::Ordering;
 
 use cosmwasm_std::{
     log, debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier,
-    StdError, StdResult, Storage, HumanAddr, MessageInfo, CosmosMsg, Empty, BlockInfo, ReadonlyStorage
-};
-
-// use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};
-// use secret_toolkit::serialization::{Bincode2, Serde};
-// use secret_toolkit::storage::AppendStore;
+    StdError, StdResult, Storage, CosmosMsg, Empty };
 
 // use crate::error::ContractError;
-use crate::expiration::{ Duration, Expiration };
-use crate::msg::{ HandleMsg, InitMsg, QueryMsg, Vote, Voter };
-use crate::query::{
-    ProposalListResponse, ProposalResponse, VoteInfo, VoteListResponse, VoteResponse,
-    VoterDetail, VoterListResponse, VoterResponse, Status
-};
+use crate::expiration::Expiration;
+use crate::msg::{ HandleMsg, InitMsg, QueryMsg, Vote };
+use crate::query::{ ProposalListResponse, ProposalResponse, VoteInfo, VoteListResponse,
+                    VoteResponse, VoterListResponse, VoterResponse, Status };
 use crate::state::{ config, config_read, voters, voters_read, proposal_count, proposal_count_read,
                     ballots, ballots_read, proposals, proposals_read, voters_list, voters_list_read };
-use crate::state::{ Ballot, Config, Proposal, Votes, PROPOSALS_KEY, VOTERS_KEY, VOTERS_LIST_KEY};
+use crate::state::{ Ballot, Config, Proposal, Votes };
 use crate::threshold::ThresholdResponse;
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
@@ -56,8 +47,6 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
 
     // set initial value for proposal count
     proposal_count(&mut deps.storage).save(&0);
-
-    debug_print!("Contract was initialized by {}", env.message.sender);
 
     Ok(InitResponse::default())
 }
@@ -375,27 +364,6 @@ fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
     Ok(ProposalListResponse { proposals })
 }
 
-// not currently using this...
-fn map_proposal<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
-    // block: &BlockInfo,
-    item: StdResult<(u64, Proposal)>,
-) -> StdResult<ProposalResponse> {
-    item.map(|(id, prop)| {
-        // let status = prop.current_status(block);
-        let threshold = prop.threshold.to_response(prop.total_weight);
-        ProposalResponse {
-            id,
-            title: prop.title,
-            description: prop.description,
-            msgs: prop.msgs,
-            status: prop.status, //using status from last save (it may have expired since then)
-            expires: prop.expires,
-            threshold,
-        }
-    })
-}
-
 fn query_vote<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     proposal_id: u64,
@@ -423,14 +391,9 @@ fn list_votes<S: Storage, A: Api, Q: Querier>(
     // let start = start_after.unwrap_or_default().to_string(); //not sure about this
 
     let voters = voters_list_read(&deps.storage).load()?;
-
-    let voter_count = voters.len();
-
     let mut votes: Vec<VoteInfo> = Vec::new();
-   
     for voter in voters {
         let ballot = ballots_read(&deps.storage, proposal_id).may_load(&voter.addr.as_bytes()).unwrap();
-
         if ballot.is_some() {
             let vote_info = VoteInfo {
                 proposal_id,
@@ -441,8 +404,6 @@ fn list_votes<S: Storage, A: Api, Q: Querier>(
             votes.push(vote_info);
         } 
     }
-
-
     Ok(VoteListResponse { votes })
 }
 
@@ -462,9 +423,7 @@ fn list_voters<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<VoterListResponse> {
     // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
     // let start = start_after.unwrap_or_default();
-
     let voters = voters_list_read(&deps.storage).load()?;
-
     Ok(VoterListResponse { voters })
 }
 
