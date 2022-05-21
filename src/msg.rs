@@ -56,14 +56,14 @@ pub enum QueryMsg {
     /// Returns VoteListResponse
     ListVotes {
         proposal_id: u64,
-        start_after: Option<String>,
+        start_after: Option<String>, // Currently no use for this
         limit: Option<u32>,
     },
     /// Returns VoterInfo
     Voter { address: String },
     /// Returns VoterListResponse
     ListVoters {
-        start_after: Option<String>,
+        start_after: Option<String>, // Currently no use for this
         limit: Option<u32>,
     },
 }

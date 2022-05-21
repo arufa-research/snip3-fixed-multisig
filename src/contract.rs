@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use cosmwasm_std::{
-    log, debug_print, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier,
+    log, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier,
     StdError, StdResult, Storage, CosmosMsg, Empty };
 
 // use crate::error::ContractError;
@@ -16,7 +16,7 @@ use crate::threshold::ThresholdResponse;
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
-    env: Env,
+    _env: Env,
     msg: InitMsg,
 ) -> Result<InitResponse, StdError> {
     if msg.voters.is_empty() {
@@ -46,7 +46,7 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     }
 
     // set initial value for proposal count
-    proposal_count(&mut deps.storage).save(&0);
+    proposal_count(&mut deps.storage).save(&0)?;
 
     Ok(InitResponse::default())
 }
@@ -293,10 +293,8 @@ fn query_proposal<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>, id: u6
 }
 
 // settings for pagination
-// const MAX_LIMIT: u32 = 30;
-// const DEFAULT_LIMIT: u32 = 10;
-// let's figure out the limit stuff later
-// for now, return the full list every time
+const MAX_LIMIT: u32 = 30;
+const DEFAULT_LIMIT: u32 = 10;
 
 fn list_proposals<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
@@ -305,10 +303,9 @@ fn list_proposals<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<ProposalListResponse> {
     let latest_prop = proposal_count_read(&deps.storage).load()?;
 
-    // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).into();
-    // let start = start_after.unwrap_or(1);
-    let start = 1;
-    let limit = latest_prop;
+    let limit: u64 = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).into();
+    let limit = limit.min(latest_prop);
+    let start = start_after.unwrap_or(1);
     
     let mut proposals: Vec<ProposalResponse> = vec![];
     let mut i = start;
@@ -338,14 +335,13 @@ fn reverse_proposals<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<ProposalListResponse> {
     let latest_prop = proposal_count_read(&deps.storage).load()?;
 
-    // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).into();
-    // let start = start_before.unwrap_or(latest_prop);
-    let start = latest_prop;
-    let limit = 1;
-    
+    let limit: u64 = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).into();
+    let limit = limit.min(latest_prop) + 1;
+    let start = start_before.unwrap_or(latest_prop).min(latest_prop);
+
     let mut proposals: Vec<ProposalResponse> = vec![];
     let mut i = start;
-    while i >= limit {
+    for _n in 1..limit {
         let prop = proposals_read(&deps.storage).load(&i.to_le_bytes())?;
         let threshold = prop.threshold.to_response(prop.total_weight);
         let prop_response = ProposalResponse {
@@ -384,12 +380,11 @@ fn query_vote<S: Storage, A: Api, Q: Querier>(
 fn list_votes<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     proposal_id: u64,
-    start_after: Option<String>,
-    limit: Option<u32>,
+    _start_after: Option<String>,
+    _limit: Option<u32>,
 ) -> StdResult<VoteListResponse> {
-    // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    // let start = start_after.unwrap_or_default().to_string(); //not sure about this
-
+    // Currently no use for start_after or limit 
+    // Returns every vote 
     let voters = voters_list_read(&deps.storage).load()?;
     let mut votes: Vec<VoteInfo> = Vec::new();
     for voter in voters {
@@ -418,11 +413,11 @@ fn query_voter<S: Storage, A: Api, Q: Querier>(
 
 fn list_voters<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
-    start_after: Option<String>,
-    limit: Option<u32>,
+    _start_after: Option<String>,
+    _limit: Option<u32>,
 ) -> StdResult<VoterListResponse> {
-    // let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    // let start = start_after.unwrap_or_default();
+    // Currently no use for start_after or limit 
+    // Returns the full list of voters
     let voters = voters_list_read(&deps.storage).load()?;
     Ok(VoterListResponse { voters })
 }
