@@ -79,32 +79,33 @@ cargo test
 
 You can run integration tests on this via Node.js and LocalSecret:
 
-### Install Node Modules
+**Install Node Modules**
 
 ```
 cd tests/
 npm install
 ```
 
-### Install LocalSecret
+**Install LocalSecret**
 
 ```
 docker pull ghcr.io/scrtlabs/localsecret
 ```
 
-### Start LocalSecret (in a new terminal)
+**Start LocalSecret (in a new terminal)**
 
 ```
 docker run -it -p 9091:9091 -p 26657:26657 -p 1317:1317 -p 5000:5000 --name localsecret ghcr.io/scrtlabs/localsecret
 ```
 
-### Run Integration Tests from Root Project Directory
+**Run Integration Tests from Root Project Directory**
 
 ```
 ts-node tests/integration.ts
 ```
 
-Once you are happy with the content, you can compile it to wasm via:
+## Compiling this contract
+You can compile to wasm via:
 
 ```
 RUSTFLAGS='-C link-arg=-s' cargo build --release --target wasm32-unknown-unknown --locked
