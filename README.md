@@ -34,7 +34,7 @@ All things related to contract versioning and migration have been removed as the
 
 Numerous changes to storage methods since cw-storage-plus is not compatible with secret-cosmwasm-std, including iterations over storage.
 
-`ListVotes{proposal_id, start_after, limit}` is unable to use `start_after` and will return the full list of voters.
+`ListVotes{proposal_id, start_after, limit}` is unable to use `start_after`, and there is no use for `limit`. This query will return the full list of voters.
 
 >## Instantiation
 >
