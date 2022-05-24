@@ -22,11 +22,7 @@ The list of voters cannot be changed after instantiation!
 
 Modules `expiration.rs`, `math.rs`, and `threshold.rs` have been included directly instead of importing from external crates, because some modifications were needed to be compatible.
 
-`error.rs` is not currently being used, but could be used for cleaner code. StdError::GenericErr is used throughout instead. 
-
 Added a subtraction method for `Decimal` type in `math.rs`.
-
-Three unit tests in `threshold.rs` have been disabled due to the presence of "Generic error: " at the beginning of the error message. 
 
 ## Differences From CW3 Fixed Multisig
 
