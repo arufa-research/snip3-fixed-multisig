@@ -18,9 +18,9 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     _env: Env,
     msg: InitMsg,
-) -> Result<InitResponse, ContractError> {
+) -> Result<InitResponse, StdError> {
     if msg.voters.is_empty() {
-        return Err(ContractError::NoVoters {});
+        return Err(StdError::generic_err((ContractError::NoVoters {}).to_string()));
     }
 
     let total_weight = msg.voters.iter().map(|v| v.weight).sum();
@@ -55,7 +55,7 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     msg: HandleMsg,
-) -> Result<HandleResponse<Empty>, ContractError> {
+) -> Result<HandleResponse<Empty>, StdError> {
     match msg {
         HandleMsg::Propose {
             title,
@@ -77,11 +77,11 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
     msgs: Vec<CosmosMsg>,
     // we ignore earliest
     latest: Option<Expiration>,
-) -> Result<HandleResponse<Empty>, ContractError> {
+) -> Result<HandleResponse<Empty>, StdError> {
     // only members of the multisig can create a proposal
     let vote_power: u64 = voters_read(&deps.storage)
         .may_load(&env.message.sender.to_string().as_bytes())?
-        .ok_or(ContractError::Unauthorized {})?;
+        .ok_or(StdError::generic_err(ContractError::Unauthorized {}.to_string()))?;
 
     let cfg = config_read(&deps.storage).load()?;
 
@@ -92,7 +92,7 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
     if let Some(Ordering::Greater) = comp {
         expires = max_expires;
     } else if comp.is_none() {
-        return Err(ContractError::WrongExpiration {});
+        return Err(StdError::generic_err(ContractError::WrongExpiration {}.to_string()));
     }
 
     // create a proposal
@@ -137,26 +137,26 @@ pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
     env: Env,
     proposal_id: u64,
     vote: Vote,
-) -> Result<HandleResponse<Empty>, ContractError> {
+) -> Result<HandleResponse<Empty>, StdError> {
     // only members of the multisig with weight >= 1 can vote
     let voter_power = voters_read(&deps.storage).may_load(&env.message.sender.to_string().as_bytes())?;
     let vote_power = match voter_power {
         Some(power) if power >= 1 => power,
-        _ => return Err(ContractError::Unauthorized {}),
+        _ => return Err(StdError::generic_err(ContractError::Unauthorized {}.to_string())),
     };
 
     // ensure proposal exists and can be voted on
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     if prop.status != Status::Open {
-        return Err(ContractError::NotOpen {});
+        return Err(StdError::generic_err(ContractError::NotOpen {}.to_string()));
     }
     if prop.expires.is_expired(&env.block) {
-        return Err(ContractError::Expired {});
+        return Err(StdError::generic_err(ContractError::Expired {}.to_string()));
     }
 
     // a voter can only vote once
     if let Some(_ballot) = ballots_read(&deps.storage, proposal_id).may_load(&env.message.sender.to_string().as_bytes())? {
-        return Err(ContractError::AlreadyVoted {})
+        return Err(StdError::generic_err(ContractError::AlreadyVoted {}.to_string()))
     }
 
     let ballot = Ballot {
@@ -186,14 +186,14 @@ pub fn execute_execute<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     proposal_id: u64,
-) -> Result<HandleResponse, ContractError> {
+) -> Result<HandleResponse, StdError> {
     // anyone can trigger this if the vote passed
 
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     // we allow execution even after the proposal "expiration" as long as all vote come in before
     // that point. If it was approved on time, it can be executed any time.
     if prop.status != Status::Passed {
-        return Err(ContractError::WrongExecuteStatus {});
+        return Err(StdError::generic_err(ContractError::WrongExecuteStatus {}.to_string()));
     }
 
     // set it to executed
@@ -215,7 +215,7 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     proposal_id: u64,
-) -> Result<HandleResponse<Empty>, ContractError> {
+) -> Result<HandleResponse<Empty>, StdError> {
     // anyone can trigger this if the vote passed
 
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
@@ -223,10 +223,10 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
         .iter()
         .any(|x| *x == prop.status)
     {
-        return Err(ContractError::WrongCloseStatus {});
+        return Err(StdError::generic_err(ContractError::WrongCloseStatus {}.to_string()));
     }
     if !prop.expires.is_expired(&env.block) {
-        return Err(ContractError::NotExpired {});
+        return Err(StdError::generic_err(ContractError::NotExpired {}.to_string()));
     }
 
     // set it to failed
@@ -473,7 +473,7 @@ mod tests {
         info: MessageInfo,
         threshold: Threshold,
         max_voting_period: Duration,
-    ) -> Result<InitResponse<Empty>, ContractError> {
+    ) -> Result<InitResponse<Empty>, StdError> {
         // Instantiate a contract with voters
         let voters = vec![
             voter(&info.sender.to_string(), 1),
@@ -533,7 +533,7 @@ mod tests {
             init_msg.clone(),
         )
         .unwrap_err();
-        assert_eq!(err, ContractError::NoVoters {});
+        assert_eq!(err, StdError::generic_err(ContractError::NoVoters {}.to_string()));
 
         // Zero required weight fails
         let init_msg = InitMsg {
@@ -544,7 +544,7 @@ mod tests {
             init(&mut deps, mock_env(OWNER, &[]), init_msg).unwrap_err();
         assert_eq!(
             err,
-            ContractError::Threshold(ThresholdError::InvalidThreshold {})
+            StdError::generic_err(ContractError::Threshold(ThresholdError::InvalidThreshold {}).to_string())
         );
 
         // Total weight less than required weight not allowed
@@ -553,7 +553,7 @@ mod tests {
             setup_test_case(&mut deps, info.clone(), threshold, max_voting_period).unwrap_err();
         assert_eq!(
             err,
-            ContractError::Threshold(ThresholdError::UnreachableWeight {})
+            StdError::generic_err(ContractError::Threshold(ThresholdError::UnreachableWeight {}).to_string())
         );
 
         // All valid
@@ -598,7 +598,7 @@ mod tests {
         };
         // Only voters with weight can vote
         let err = handle(&mut deps, mock_env(NOWEIGHT_VOTER, &[]), no_vote).unwrap_err();
-        assert_eq!(err, ContractError::Unauthorized {});
+        assert_eq!(err, StdError::generic_err(ContractError::Unauthorized {}.to_string()));
     }
 
     #[test]
@@ -626,7 +626,7 @@ mod tests {
             latest: None,
         };
         let err = handle(&mut deps, mock_env(SOMEBODY, &[]), proposal.clone()).unwrap_err();
-        assert_eq!(err, ContractError::Unauthorized {});
+        assert_eq!(err, StdError::generic_err(ContractError::Unauthorized {}.to_string()));
 
         // Wrong expiration option fails
         let proposal_wrong_exp = HandleMsg::Propose {
@@ -636,7 +636,7 @@ mod tests {
             latest: Some(Expiration::AtHeight(123456)),
         };
         let err = handle(&mut deps, mock_env(OWNER, &[]), proposal_wrong_exp).unwrap_err();
-        assert_eq!(err, ContractError::WrongExpiration {});
+        assert_eq!(err, StdError::generic_err(ContractError::WrongExpiration {}.to_string()));
 
         // Proposal from voter works
         let res = handle( &mut deps, mock_env(VOTER3, &[]), proposal.clone()).unwrap();
@@ -707,11 +707,11 @@ mod tests {
             vote: Vote::Yes,
         };
         let err = handle(&mut deps, mock_env(OWNER, &[]), yes_vote.clone()).unwrap_err();
-        assert_eq!(err, ContractError::AlreadyVoted {});
+        assert_eq!(err, StdError::generic_err(ContractError::AlreadyVoted {}.to_string()));
 
         // Only voters can vote
         let err = handle(&mut deps, mock_env(SOMEBODY, &[]), yes_vote.clone()).unwrap_err();
-        assert_eq!(err, ContractError::Unauthorized {});
+        assert_eq!(err, StdError::generic_err(ContractError::Unauthorized {}.to_string()));
 
         // But voter1 can
         let res = handle(&mut deps, mock_env(VOTER1, &[]), yes_vote.clone()).unwrap();
@@ -756,7 +756,7 @@ mod tests {
 
         // Once voted, votes cannot be changed
         let err = handle(&mut deps, mock_env(VOTER3, &[]), yes_vote.clone()).unwrap_err();
-        assert_eq!(err, ContractError::AlreadyVoted {});
+        assert_eq!(err, StdError::generic_err(ContractError::AlreadyVoted {}.to_string()));
         assert_eq!(tally, get_tally(&deps, proposal_id));
 
         // Expired proposals cannot be voted
@@ -765,7 +765,7 @@ mod tests {
             Duration::Height(duration) => mock_env_height(duration + 1),
         };
         let err = handle(&mut deps, env, no_vote).unwrap_err();
-        assert_eq!(err, ContractError::Expired {});
+        assert_eq!(err, StdError::generic_err(ContractError::Expired {}.to_string()));
 
         // Vote it again, so it passes
         let res = handle(&mut deps, mock_env(VOTER4, &[]), yes_vote.clone()).unwrap();
@@ -786,7 +786,7 @@ mod tests {
 
         // non-Open proposals cannot be voted
         let err = handle(&mut deps, mock_env(VOTER5, &[]), yes_vote).unwrap_err();
-        assert_eq!(err, ContractError::NotOpen {});
+        assert_eq!(err, StdError::generic_err(ContractError::NotOpen {}.to_string()));
 
         // Propose
         let bank_msg = BankMsg::Send {
@@ -915,7 +915,7 @@ mod tests {
         // Only Passed can be executed
         let execution = HandleMsg::Execute { proposal_id };
         let err = handle(&mut deps, mock_env(OWNER, &[]), execution.clone()).unwrap_err();
-        assert_eq!(err, ContractError::WrongExecuteStatus {});
+        assert_eq!(err, StdError::generic_err(ContractError::WrongExecuteStatus {}.to_string()));
 
         // Vote it, so it passes
         let vote = HandleMsg::Vote {
@@ -941,7 +941,7 @@ mod tests {
         // In passing: Try to close Passed fails
         let closing = HandleMsg::Close { proposal_id };
         let err = handle(&mut deps, mock_env(VOTER3, &[]), closing).unwrap_err();
-        assert_eq!(err, ContractError::WrongCloseStatus {});
+        assert_eq!(err, StdError::generic_err(ContractError::WrongCloseStatus {}.to_string()));
 
         // Execute works. Anybody can execute Passed proposals
         let res = handle(&mut deps, mock_env(SOMEBODY, &[]), execution).unwrap();
@@ -962,7 +962,7 @@ mod tests {
         // In passing: Try to close Executed fails
         let closing = HandleMsg::Close { proposal_id };
         let err = handle(&mut deps, mock_env(SOMEBODY, &[]), closing).unwrap_err();
-        assert_eq!(err, ContractError::WrongCloseStatus {});
+        assert_eq!(err, StdError::generic_err(ContractError::WrongCloseStatus {}.to_string()));
     }
 
     #[test]
@@ -997,7 +997,7 @@ mod tests {
 
         // Non-expired proposals cannot be closed
         let err = handle(&mut deps, mock_env(SOMEBODY, &[]), closing).unwrap_err();
-        assert_eq!(err, ContractError::NotExpired {});
+        assert_eq!(err, StdError::generic_err(ContractError::NotExpired {}.to_string()));
 
         // Expired proposals can be closed
         let proposal = HandleMsg::Propose {
@@ -1037,6 +1037,6 @@ mod tests {
 
         // Trying to close it again fails
         let err = handle(&mut deps, mock_env(SOMEBODY, &[]), closing).unwrap_err();
-        assert_eq!(err, ContractError::WrongCloseStatus {});
+        assert_eq!(err, StdError::generic_err(ContractError::WrongCloseStatus {}.to_string()));
     }
 }

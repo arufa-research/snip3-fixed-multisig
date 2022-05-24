@@ -34,15 +34,15 @@ pub enum Threshold {
 impl Threshold {
     /// returns error if this is an unreachable value,
     /// given a total weight of all members in the group
-    pub fn validate(&self, total_weight: u64) -> Result<(), ThresholdError> {
+    pub fn validate(&self, total_weight: u64) -> Result<(), StdError> {
         match self {
             Threshold::AbsoluteCount {
                 weight: weight_needed,
             } => {
                 if *weight_needed == 0 {
-                    Err(ThresholdError::ZeroWeight {})
+                    Err(StdError::generic_err(ThresholdError::ZeroWeight {}.to_string()))
                 } else if *weight_needed > total_weight {
-                    Err(ThresholdError::UnreachableWeight {})
+                    Err(StdError::generic_err(ThresholdError::UnreachableWeight {}.to_string()))
                 } else {
                     Ok(())
                 }
@@ -83,20 +83,20 @@ impl Threshold {
 }
 
 /// Asserts that the 0.5 < percent <= 1.0
-fn valid_threshold(percent: &Decimal) -> Result<(), ThresholdError> {
+fn valid_threshold(percent: &Decimal) -> Result<(), StdError> {
     if *percent > Decimal::percent(100) || *percent < Decimal::percent(50) {
-        Err(ThresholdError::InvalidThreshold {})
+        Err(StdError::generic_err(ThresholdError::InvalidThreshold {}.to_string()))
     } else {
         Ok(())
     }
 }
 
 /// Asserts that the 0.5 < percent <= 1.0
-fn valid_quorum(percent: &Decimal) -> Result<(), ThresholdError> {
+fn valid_quorum(percent: &Decimal) -> Result<(), StdError> {
     if percent.is_zero() {
-        Err(ThresholdError::ZeroQuorumThreshold {})
+        Err(StdError::generic_err(ThresholdError::ZeroQuorumThreshold {}.to_string()))
     } else if *percent > Decimal::one() {
-        Err(ThresholdError::UnreachableQuorumThreshold {})
+        Err(StdError::generic_err(ThresholdError::UnreachableQuorumThreshold {}.to_string()))
     } else {
         Ok(())
     }
@@ -204,7 +204,7 @@ mod tests {
         let err = valid_quorum(&Decimal::zero()).unwrap_err();
         assert_eq!(
             err.to_string(),
-            ThresholdError::ZeroQuorumThreshold {}.to_string()
+            StdError::generic_err(ThresholdError::ZeroQuorumThreshold {}.to_string()).to_string()
         );
 
         // 100% is
@@ -214,13 +214,13 @@ mod tests {
         let err = valid_quorum(&Decimal::percent(101)).unwrap_err();
         assert_eq!(
             err.to_string(),
-            ThresholdError::UnreachableQuorumThreshold {}.to_string()
+            StdError::generic_err(ThresholdError::UnreachableQuorumThreshold {}.to_string()).to_string()
         );
         // not 100.1%
         let err = valid_quorum(&Decimal::permille(1001)).unwrap_err();
         assert_eq!(
             err.to_string(),
-            ThresholdError::UnreachableQuorumThreshold {}.to_string()
+            StdError::generic_err(ThresholdError::UnreachableQuorumThreshold {}.to_string()).to_string()
         );
     }
 
@@ -233,7 +233,7 @@ mod tests {
         let err = valid_threshold(&Decimal::percent(101)).unwrap_err();
         assert_eq!(
             err.to_string(),
-            ThresholdError::InvalidThreshold {}.to_string()
+            StdError::generic_err(ThresholdError::InvalidThreshold {}.to_string()).to_string()
         );
     }
 
@@ -244,13 +244,13 @@ mod tests {
             .validate(5)
             .unwrap_err();
         // TODO: remove to_string() when PartialEq implemented
-        assert_eq!(err.to_string(), ThresholdError::ZeroWeight {}.to_string());
+        assert_eq!(err.to_string(), StdError::generic_err(ThresholdError::ZeroWeight {}.to_string()).to_string());
         let err = Threshold::AbsoluteCount { weight: 6 }
             .validate(5)
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            ThresholdError::UnreachableWeight {}.to_string()
+            StdError::generic_err(ThresholdError::UnreachableWeight {}.to_string()).to_string()
         );
 
         Threshold::AbsoluteCount { weight: 1 }.validate(5).unwrap();
@@ -264,7 +264,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.to_string(),
-            ThresholdError::InvalidThreshold {}.to_string()
+            StdError::generic_err(ThresholdError::InvalidThreshold {}.to_string()).to_string()
         );
         Threshold::AbsolutePercentage {
             percentage: Decimal::percent(51),
@@ -287,7 +287,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.to_string(),
-            ThresholdError::InvalidThreshold {}.to_string()
+            StdError::generic_err(ThresholdError::InvalidThreshold {}.to_string()).to_string()
         );
         let err = Threshold::ThresholdQuorum {
             threshold: Decimal::percent(51),
@@ -297,7 +297,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             err.to_string(),
-            ThresholdError::ZeroQuorumThreshold {}.to_string()
+            StdError::generic_err(ThresholdError::ZeroQuorumThreshold {}.to_string()).to_string()
         );
     }
 
