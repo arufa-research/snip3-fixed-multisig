@@ -4,7 +4,7 @@ use cosmwasm_std::{
     log, to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier,
     StdError, StdResult, Storage, CosmosMsg, Empty };
 
-// use crate::error::ContractError;
+use crate::error::ContractError;
 use crate::expiration::Expiration;
 use crate::msg::{ HandleMsg, InitMsg, QueryMsg, Vote };
 use crate::query::{ ProposalListResponse, ProposalResponse, VoteInfo, VoteListResponse,
@@ -18,9 +18,9 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     _env: Env,
     msg: InitMsg,
-) -> Result<InitResponse, StdError> {
+) -> Result<InitResponse, ContractError> {
     if msg.voters.is_empty() {
-        return Err(StdError::generic_err("No voters"));
+        return Err(ContractError::NoVoters {});
     }
 
     let total_weight = msg.voters.iter().map(|v| v.weight).sum();
@@ -55,7 +55,7 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     msg: HandleMsg,
-) -> Result<HandleResponse<Empty>, StdError> {
+) -> Result<HandleResponse<Empty>, ContractError> {
     match msg {
         HandleMsg::Propose {
             title,
@@ -77,11 +77,11 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
     msgs: Vec<CosmosMsg>,
     // we ignore earliest
     latest: Option<Expiration>,
-) -> Result<HandleResponse<Empty>, StdError> {
+) -> Result<HandleResponse<Empty>, ContractError> {
     // only members of the multisig can create a proposal
     let vote_power: u64 = voters_read(&deps.storage)
         .may_load(&env.message.sender.to_string().as_bytes())?
-        .ok_or(StdError::generic_err("Unauthorized"))?;
+        .ok_or(ContractError::Unauthorized {})?;
 
     let cfg = config_read(&deps.storage).load()?;
 
@@ -92,7 +92,7 @@ pub fn execute_propose<S: Storage, A: Api, Q: Querier>(
     if let Some(Ordering::Greater) = comp {
         expires = max_expires;
     } else if comp.is_none() {
-        return Err(StdError::generic_err("Wrong expiration option"));
+        return Err(ContractError::WrongExpiration {});
     }
 
     // create a proposal
@@ -137,21 +137,21 @@ pub fn execute_vote<S: Storage, A: Api, Q: Querier>(
     env: Env,
     proposal_id: u64,
     vote: Vote,
-) -> Result<HandleResponse<Empty>, StdError> {
+) -> Result<HandleResponse<Empty>, ContractError> {
     // only members of the multisig with weight >= 1 can vote
     let voter_power = voters_read(&deps.storage).may_load(&env.message.sender.to_string().as_bytes())?;
     let vote_power = match voter_power {
         Some(power) if power >= 1 => power,
-        _ => return Err(StdError::unauthorized()),
+        _ => return Err(ContractError::Unauthorized {}),
     };
 
     // ensure proposal exists and can be voted on
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     if prop.status != Status::Open {
-        return Err(StdError::generic_err("Proposal is not open"));
+        return Err(ContractError::NotOpen {});
     }
     if prop.expires.is_expired(&env.block) {
-        return Err(StdError::generic_err("Proposal voting period has expired"));
+        return Err(ContractError::Expired {});
     }
 
     // TODO check if the person has already voted before trying to save
@@ -182,14 +182,14 @@ pub fn execute_execute<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     proposal_id: u64,
-) -> Result<HandleResponse, StdError> {
+) -> Result<HandleResponse, ContractError> {
     // anyone can trigger this if the vote passed
 
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
     // we allow execution even after the proposal "expiration" as long as all vote come in before
     // that point. If it was approved on time, it can be executed any time.
     if prop.status != Status::Passed {
-        return Err(StdError::generic_err("Proposal must have passed and not yet been executed"));
+        return Err(ContractError::WrongExecuteStatus {});
     }
 
     // set it to executed
@@ -211,7 +211,7 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     proposal_id: u64,
-) -> Result<HandleResponse<Empty>, StdError> {
+) -> Result<HandleResponse<Empty>, ContractError> {
     // anyone can trigger this if the vote passed
 
     let mut prop = proposals_read(&deps.storage).load(&proposal_id.to_le_bytes())?;
@@ -219,10 +219,10 @@ pub fn execute_close<S: Storage, A: Api, Q: Querier>(
         .iter()
         .any(|x| *x == prop.status)
     {
-        return Err(StdError::generic_err("Cannot close completed or passed proposals"));
+        return Err(ContractError::WrongCloseStatus {});
     }
     if !prop.expires.is_expired(&env.block) {
-        return Err(StdError::generic_err("Proposal must expire before you can close it"));
+        return Err(ContractError::NotExpired {});
     }
 
     // set it to failed
@@ -422,260 +422,261 @@ fn list_voters<S: Storage, A: Api, Q: Querier>(
     Ok(VoterListResponse { voters })
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-//     use cosmwasm_std::{coin, from_binary, BankMsg, Decimal};
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::testing::{mock_dependencies, mock_env};
+    use cosmwasm_std::{coin, coins, from_binary, BankMsg, Coin, MessageInfo, HumanAddr};
 
-//     use crate::expiration::Duration;
-//     use crate::threshold::Threshold;
+    use crate::expiration::Duration;
+    use crate::threshold::{Threshold, ThresholdError};
+    use crate::math::{Decimal, Uint128};
+    use crate::msg::Voter;
 
-//     use crate::msg::Voter;
+    use super::*;
 
-//     use super::*;
+    static ENV: (&str, &[Coin]) = (OWNER, &[]);
 
-//     fn mock_env_height(height_delta: u64) -> Env {
-//         let mut env = mock_env();
-//         env.block.height += height_delta;
-//         env
-//     }
+    fn mock_env_height(height_delta: u64) -> Env {
+        let mut env = mock_env(OWNER, &[]);
+        env.block.height += height_delta;
+        env
+    }
 
-//     fn mock_env_time(time_delta: u64) -> Env {
-//         let mut env = mock_env();
-//         env.block.time = env.block.time.plus_seconds(time_delta);
-//         env
-//     }
+    fn mock_env_time(time_delta: u64) -> Env {
+        let mut env = mock_env(OWNER, &[]);
+        env.block.time = env.block.time + time_delta;
+        env
+    }
 
-//     const OWNER: &str = "admin0001";
-//     const VOTER1: &str = "voter0001";
-//     const VOTER2: &str = "voter0002";
-//     const VOTER3: &str = "voter0003";
-//     const VOTER4: &str = "voter0004";
-//     const VOTER5: &str = "voter0005";
-//     const NOWEIGHT_VOTER: &str = "voterxxxx";
-//     const SOMEBODY: &str = "somebody";
+    const OWNER: &str = "admin0001";
+    const VOTER1: &str = "voter0001";
+    const VOTER2: &str = "voter0002";
+    const VOTER3: &str = "voter0003";
+    const VOTER4: &str = "voter0004";
+    const VOTER5: &str = "voter0005";
+    const NOWEIGHT_VOTER: &str = "voterxxxx";
+    const SOMEBODY: &str = "somebody";
 
-//     fn voter<T: Into<String>>(addr: T, weight: u64) -> Voter {
-//         Voter {
-//             addr: addr.into(),
-//             weight,
-//         }
-//     }
+    fn voter<T: Into<String>>(addr: T, weight: u64) -> Voter {
+        Voter {
+            addr: addr.into(),
+            weight,
+        }
+    }
 
-//     // this will set up the instantiation for other tests
-//     #[track_caller]
-//     fn setup_test_case(
-//         deps: DepsMut,
-//         info: MessageInfo,
-//         threshold: Threshold,
-//         max_voting_period: Duration,
-//     ) -> Result<Response<Empty>, ContractError> {
-//         // Instantiate a contract with voters
-//         let voters = vec![
-//             voter(&info.sender, 1),
-//             voter(VOTER1, 1),
-//             voter(VOTER2, 2),
-//             voter(VOTER3, 3),
-//             voter(VOTER4, 4),
-//             voter(VOTER5, 5),
-//             voter(NOWEIGHT_VOTER, 0),
-//         ];
+    // this will set up the instantiation for other tests
+    #[track_caller]
+    fn setup_test_case<S: Storage, A: Api, Q: Querier>(
+        deps: &mut Extern<S, A, Q>,
+        info: MessageInfo,
+        threshold: Threshold,
+        max_voting_period: Duration,
+    ) -> Result<InitResponse<Empty>, ContractError> {
+        // Instantiate a contract with voters
+        let voters = vec![
+            voter(&info.sender.to_string(), 1),
+            voter(VOTER1, 1),
+            voter(VOTER2, 2),
+            voter(VOTER3, 3),
+            voter(VOTER4, 4),
+            voter(VOTER5, 5),
+            voter(NOWEIGHT_VOTER, 0),
+        ];
 
-//         let instantiate_msg = InstantiateMsg {
-//             voters,
-//             threshold,
-//             max_voting_period,
-//         };
-//         instantiate(deps, mock_env(), info, instantiate_msg)
-//     }
+        let init_msg = InitMsg {
+            voters,
+            threshold,
+            max_voting_period,
+        };
+        init(deps, mock_env(OWNER, &[]), init_msg)
+    }
 
-//     fn get_tally(deps: Deps, proposal_id: u64) -> u64 {
-//         // Get all the voters on the proposal
-//         let voters = QueryMsg::ListVotes {
-//             proposal_id,
-//             start_after: None,
-//             limit: None,
-//         };
-//         let votes: VoteListResponse =
-//             from_binary(&query(deps, voters).unwrap()).unwrap();
-//         // Sum the weights of the Yes votes to get the tally
-//         votes
-//             .votes
-//             .iter()
-//             .filter(|&v| v.vote == Vote::Yes)
-//             .map(|v| v.weight)
-//             .sum()
-//     }}
+    fn get_tally<S: Storage, A: Api, Q: Querier>(deps: &Extern<S,A,Q>, proposal_id: u64) -> u64 {
+        // Get all the voters on the proposal
+        let voters = QueryMsg::ListVotes {
+            proposal_id,
+            start_after: None,
+            limit: None,
+        };
+        let votes: VoteListResponse =
+            from_binary(&query(deps, voters).unwrap()).unwrap();
+        // Sum the weights of the Yes votes to get the tally
+        votes
+            .votes
+            .iter()
+            .filter(|&v| v.vote == Vote::Yes)
+            .map(|v| v.weight)
+            .sum()
+    }
 
-//     #[test]
-//     fn test_instantiate_works() {
-//         let mut deps = mock_dependencies();
-//         let info = mock_info(OWNER, &[]);
+    #[test]
+    fn test_init_works() {
+        let mut deps = mock_dependencies(6,&[]);
+        let info = MessageInfo {sender: HumanAddr::from(OWNER), sent_funds: vec![]};
 
-//         let max_voting_period = Duration::Time(1234567);
+        let max_voting_period = Duration::Time(1234567);
 
-//         // No voters fails
-//         let instantiate_msg = InstantiateMsg {
-//             voters: vec![],
-//             threshold: Threshold::ThresholdQuorum {
-//                 threshold: Decimal::zero(),
-//                 quorum: Decimal::percent(1),
-//             },
-//             max_voting_period,
-//         };
-//         let err = instantiate(
-//             deps.as_mut(),
-//             mock_env(),
-//             info.clone(),
-//             instantiate_msg.clone(),
-//         )
-//         .unwrap_err();
-//         assert_eq!(err, ContractError::NoVoters {});
+        // No voters fails
+        let init_msg = InitMsg {
+            voters: vec![],
+            threshold: Threshold::ThresholdQuorum {
+                threshold: Decimal::zero(),
+                quorum: Decimal::percent(1),
+            },
+            max_voting_period,
+        };
+        let err = init(
+            &mut deps,
+            mock_env(OWNER, &[]),
+            init_msg.clone(),
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::NoVoters {});
 
-//         // Zero required weight fails
-//         let instantiate_msg = InstantiateMsg {
-//             voters: vec![voter(OWNER, 1)],
-//             ..instantiate_msg
-//         };
-//         let err =
-//             instantiate(deps.as_mut(), mock_env(), info.clone(), instantiate_msg).unwrap_err();
-//         assert_eq!(
-//             err,
-//             ContractError::Threshold(cw_utils::ThresholdError::InvalidThreshold {})
-//         );
+        // Zero required weight fails
+        let init_msg = InitMsg {
+            voters: vec![voter(OWNER, 1)],
+            ..init_msg
+        };
+        let err =
+            init(&mut deps, mock_env(OWNER, &[]), init_msg).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::Threshold(ThresholdError::InvalidThreshold {})
+        );
 
-//         // Total weight less than required weight not allowed
-//         let threshold = Threshold::AbsoluteCount { weight: 100 };
-//         let err =
-//             setup_test_case(deps.as_mut(), info.clone(), threshold, max_voting_period).unwrap_err();
-//         assert_eq!(
-//             err,
-//             ContractError::Threshold(cw_utils::ThresholdError::UnreachableWeight {})
-//         );
+        // Total weight less than required weight not allowed
+        let threshold = Threshold::AbsoluteCount { weight: 100 };
+        let err =
+            setup_test_case(&mut deps, info.clone(), threshold, max_voting_period).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::Threshold(ThresholdError::UnreachableWeight {})
+        );
 
-//         // All valid
-//         let threshold = Threshold::AbsoluteCount { weight: 1 };
-//         setup_test_case(deps.as_mut(), info, threshold, max_voting_period).unwrap();
+        // All valid
+        let threshold = Threshold::AbsoluteCount { weight: 1 };
+        setup_test_case(&mut deps, info.clone(), threshold, max_voting_period).unwrap();
 
-//         // Verify
-//         assert_eq!(
-//             ContractVersion {
-//                 contract: CONTRACT_NAME.to_string(),
-//                 version: CONTRACT_VERSION.to_string(),
-//             },
-//             get_contract_version(&deps.storage).unwrap()
-//         )
-//     }
+    }
 
-//     // TODO: query() tests
+    #[test]
+    fn zero_weight_member_cant_vote() {
+        let mut deps = mock_dependencies(6,&[]);
 
-//     #[test]
-//     fn zero_weight_member_cant_vote() {
-//         let mut deps = mock_dependencies();
+        let threshold = Threshold::AbsoluteCount { weight: 4 };
+        let voting_period = Duration::Time(2000000);
 
-//         let threshold = Threshold::AbsoluteCount { weight: 4 };
-//         let voting_period = Duration::Time(2000000);
+        let info = MessageInfo {sender: HumanAddr::from(OWNER), sent_funds: vec![]};
+        setup_test_case(&mut deps, info, threshold, voting_period).unwrap();
 
-//         let info = mock_info(OWNER, &[]);
-//         setup_test_case(deps.as_mut(), info, threshold, voting_period).unwrap();
+        let bank_msg = BankMsg::Send {
+            from_address: OWNER.into(),
+            to_address: SOMEBODY.into(),
+            amount: vec![coin(1, "BTC")],
+        };
+        let msgs = vec![CosmosMsg::Bank(bank_msg)];
 
-//         let bank_msg = BankMsg::Send {
-//             to_address: SOMEBODY.into(),
-//             amount: vec![coin(1, "BTC")],
-//         };
-//         let msgs = vec![CosmosMsg::Bank(bank_msg)];
+        // Voter without voting power still can create proposal
+        let info = MessageInfo {sender: HumanAddr::from(NOWEIGHT_VOTER), sent_funds: vec![]};
+        let proposal = HandleMsg::Propose {
+            title: "Rewarding somebody".to_string(),
+            description: "Do we reward her?".to_string(),
+            msgs,
+            latest: None,
+        };
+        let res = handle( &mut deps, mock_env(NOWEIGHT_VOTER, &[]), proposal).unwrap();
 
-//         // Voter without voting power still can create proposal
-//         let info = mock_info(NOWEIGHT_VOTER, &[]);
-//         let proposal = ExecuteMsg::Propose {
-//             title: "Rewarding somebody".to_string(),
-//             description: "Do we reward her?".to_string(),
-//             msgs,
-//             latest: None,
-//         };
-//         let res = execute(deps.as_mut(), mock_env(), info, proposal).unwrap();
+        // Get the proposal id from the logs
+        let proposal_id: u64 = res.log[2].value.parse().unwrap();
 
-//         // Get the proposal id from the logs
-//         let proposal_id: u64 = res.attributes[2].value.parse().unwrap();
+        // Cast a No vote
+        let no_vote = HandleMsg::Vote {
+            proposal_id,
+            vote: Vote::No,
+        };
+        // Only voters with weight can vote
+        let info = MessageInfo {sender: HumanAddr::from(NOWEIGHT_VOTER), sent_funds: vec![]};
+        let err = handle(&mut deps, mock_env(NOWEIGHT_VOTER, &[]), no_vote).unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+    }
 
-//         // Cast a No vote
-//         let no_vote = ExecuteMsg::Vote {
-//             proposal_id,
-//             vote: Vote::No,
-//         };
-//         // Only voters with weight can vote
-//         let info = mock_info(NOWEIGHT_VOTER, &[]);
-//         let err = execute(deps.as_mut(), mock_env(), info, no_vote).unwrap_err();
-//         assert_eq!(err, ContractError::Unauthorized {});
-//     }
+    #[test]
+    fn test_propose_works() {
+        let mut deps = mock_dependencies(6,&[]);
 
-//     #[test]
-//     fn test_propose_works() {
-//         let mut deps = mock_dependencies();
+        let threshold = Threshold::AbsoluteCount { weight: 4 };
+        let voting_period = Duration::Time(2000000);
 
-//         let threshold = Threshold::AbsoluteCount { weight: 4 };
-//         let voting_period = Duration::Time(2000000);
+        let info = MessageInfo {sender: HumanAddr::from(OWNER), sent_funds: vec![]};
+        setup_test_case(&mut deps, info, threshold, voting_period).unwrap();
 
-//         let info = mock_info(OWNER, &[]);
-//         setup_test_case(deps.as_mut(), info, threshold, voting_period).unwrap();
+        let bank_msg = BankMsg::Send {
+            from_address: OWNER.into(),
+            to_address: SOMEBODY.into(),
+            amount: vec![coin(1, "BTC")],
+        };
+        let msgs = vec![CosmosMsg::Bank(bank_msg)];
 
-//         let bank_msg = BankMsg::Send {
-//             to_address: SOMEBODY.into(),
-//             amount: vec![coin(1, "BTC")],
-//         };
-//         let msgs = vec![CosmosMsg::Bank(bank_msg)];
+        // Only voters can propose
+        let info = MessageInfo {sender: HumanAddr::from(SOMEBODY), sent_funds: vec![]};
+        let proposal = HandleMsg::Propose {
+            title: "Rewarding somebody".to_string(),
+            description: "Do we reward her?".to_string(),
+            msgs: msgs.clone(),
+            latest: None,
+        };
+        let err = handle(&mut deps, mock_env(SOMEBODY, &[]), proposal.clone()).unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
 
-//         // Only voters can propose
-//         let info = mock_info(SOMEBODY, &[]);
-//         let proposal = ExecuteMsg::Propose {
-//             title: "Rewarding somebody".to_string(),
-//             description: "Do we reward her?".to_string(),
-//             msgs: msgs.clone(),
-//             latest: None,
-//         };
-//         let err = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap_err();
-//         assert_eq!(err, ContractError::Unauthorized {});
+        // Wrong expiration option fails
+        let info = MessageInfo {sender: HumanAddr::from(OWNER), sent_funds: vec![]};
+        let proposal_wrong_exp = HandleMsg::Propose {
+            title: "Rewarding somebody".to_string(),
+            description: "Do we reward her?".to_string(),
+            msgs,
+            latest: Some(Expiration::AtHeight(123456)),
+        };
+        let err = handle(&mut deps, mock_env(OWNER, &[]), proposal_wrong_exp).unwrap_err();
+        assert_eq!(err, ContractError::WrongExpiration {});
 
-//         // Wrong expiration option fails
-//         let info = mock_info(OWNER, &[]);
-//         let proposal_wrong_exp = ExecuteMsg::Propose {
-//             title: "Rewarding somebody".to_string(),
-//             description: "Do we reward her?".to_string(),
-//             msgs,
-//             latest: Some(Expiration::AtHeight(123456)),
-//         };
-//         let err = execute(deps.as_mut(), mock_env(), info, proposal_wrong_exp).unwrap_err();
-//         assert_eq!(err, ContractError::WrongExpiration {});
+        // Proposal from voter works
+        let info = MessageInfo {sender: HumanAddr::from(VOTER3), sent_funds: vec![]};
+        let res = handle( &mut deps, mock_env(VOTER3, &[]), proposal.clone()).unwrap();
 
-//         // Proposal from voter works
-//         let info = mock_info(VOTER3, &[]);
-//         let res = execute(deps.as_mut(), mock_env(), info, proposal.clone()).unwrap();
+        // Verify
+        assert_eq!(
+            res,
+            HandleResponse {
+                messages: vec![],
+                log: vec![
+                    log("action","propose"),
+                    log("sender", VOTER3),
+                    log("proposal_id", 1u8.to_string()),
+                    log("status", "Open")],
+                data: None
+            }
+        );
 
-//         // Verify
-//         assert_eq!(
-//             res,
-//             Response::new()
-//                 .add_attribute("action", "propose")
-//                 .add_attribute("sender", VOTER3)
-//                 .add_attribute("proposal_id", 1.to_string())
-//                 .add_attribute("status", "Open")
-//         );
+        // Proposal from voter with enough vote power directly passes
+        let info = MessageInfo {sender: HumanAddr::from(VOTER4), sent_funds: vec![]};
+        let res = handle(&mut deps, mock_env(VOTER4, &[]), proposal).unwrap();
 
-//         // Proposal from voter with enough vote power directly passes
-//         let info = mock_info(VOTER4, &[]);
-//         let res = execute(deps.as_mut(), mock_env(), info, proposal).unwrap();
-
-//         // Verify
-//         assert_eq!(
-//             res,
-//             Response::new()
-//                 .add_attribute("action", "propose")
-//                 .add_attribute("sender", VOTER4)
-//                 .add_attribute("proposal_id", 2.to_string())
-//                 .add_attribute("status", "Passed")
-//         );
-//     }
-
+        // Verify
+        assert_eq!(
+            res,
+            HandleResponse {
+                messages: vec![],
+                log: vec![
+                    log("action","propose"),
+                    log("sender", VOTER4),
+                    log("proposal_id", 2u8.to_string()),
+                    log("status", "Passed")],
+                data: None
+            }
+        );
+    }
+}
 //     #[test]
 //     fn test_vote_works() {
 //         let mut deps = mock_dependencies();
