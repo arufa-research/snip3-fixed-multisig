@@ -1,58 +1,35 @@
 const { Contract, getAccountByName } = require("secret-polar");
-const { validators } = require("./validators_pulsar.json");
 
-async function run () {
+async function run() {
   const contract_owner = getAccountByName("account_0");
+  const user_a = getAccountByName("account_1");
+  const user_b = getAccountByName("account_2");
 
-  const staking_token = new Contract('staking-token');
-  const gov_token = new Contract('gov-token');
-  const staking_contract = new Contract('staking-contract');
+  const runTs = String(new Date());
 
-  await staking_token.parseSchema();
-  await gov_token.parseSchema();
-  await staking_contract.parseSchema();
+  const multisig_contract = new Contract('snip3-fixed-multisig');
+  await multisig_contract.parseSchema();
 
-  // deploy staking token, $seSCRT
-  const staking_token_deploy_res = await staking_token.deploy(contract_owner);
-  console.log(staking_token_deploy_res);
-  // init
-  const staking_token_info = await contract.instantiate(
-    {"count": 102},
-    "SE staking token 1",
+  const multisig_deploy = await multisig_contract.deploy(contract_owner);
+  console.log(multisig_deploy);
+
+  const multisig_init_info = await contract.instantiate(
+    {
+      voters: [
+        { addr: user_a.account.address, weight: 1 },
+        { addr: user_b.account.address, weight: 1 },
+        { addr: contract_owner.account.address, weight: 1 }
+      ],
+      threshold: { absolute_count: { weight: 2 } },
+      max_voting_period: { height: 1000 }
+    },
+    `Multisig ${runTs}`,
     contract_owner
   );
-  console.log(staking_token_info);
+  console.log(multisig_init_info);
 
-  // deploy gov token, $SEASY
-  // const gov_token_deploy_res = await gov_token.deploy(contract_owner);
-  // console.log(gov_token_deploy_res);
-  // init
-  // const gov_token_info = await contract.instantiate(
-  //   {"count": 102},
-  //   "SE gov token 1",
-  //   contract_owner
-  // );
-  // console.log(gov_token_info);
-
-  // deploy staking contract
-  const staking_contract_deploy_res = await staking_contract.deploy(contract_owner);
-  console.log(staking_contract_deploy_res);
-  // init
-  // const staking_contract_info = await contract.instantiate(
-  //   {"count": 102},
-  //   "SE staking contract 1",
-  //   contract_owner
-  // );
-  // console.log(staking_contract_info);
-
-  // add all the validators from validators_<network>.json file
-  console.log(validators);
-
-  // const ex_response = await contract.tx.increment(contract_owner);
-  // console.log(ex_response);
-
-  // const response = await contract.query.get_count();
-  // console.log(response);
+  // await staking_contract.tx.add_to_whitelist({ account: contract_owner }, { "address": "secret16l280j0kxd95q7au09hx0ry7s69mjxaltu20qd" });
+  // await staking_contract.tx.set_white({ account: contract_owner }, { "white": true, "track": false });
 }
 
 module.exports = { default: run };
